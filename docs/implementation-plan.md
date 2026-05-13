@@ -20,7 +20,7 @@ Phased roadmap for the copper-oxide-dft project. Each phase has explicit deliver
 | Dipole correction | On for asymmetric slabs (`tefield`, `dipfield`) | Removes spurious slab–slab interaction |
 | Solvation | vacuum → Environ implicit → explicit H₂O → ESM-RISM | Layered from cheap to expensive |
 | Potential | CHE post-processing → ESM-FCP constant-potential | Layered |
-| Compute | ORNL Andes (CPU) first; Frontier (GPU) for production | Andes is simpler to debug |
+| Compute | ORNL Frontier (AMD GPU); Andes (CPU) optional for debugging | Frontier is the target for all production work |
 
 ---
 
@@ -29,7 +29,7 @@ Phased roadmap for the copper-oxide-dft project. Each phase has explicit deliver
 **Goal:** End-to-end pipeline working with a trivial calculation.
 
 **Steps:**
-1. Verify ORNL HPC accounts (Andes, Frontier). Confirm QE module exists (`module avail quantum-espresso`).
+1. Verify ORNL Frontier account active. Confirm a GPU-built QE module exists (`module avail quantum-espresso`); note the exact version string for the SLURM templates.
 2. Download PseudoDojo PBE pseudopotentials for Cu, O, H; commit to `pseudopotentials/` (NB: check licensing before committing — may need to gitignore and document download path).
 3. Rename `src/package_name/` → `src/cuox_dft/`. Update `pyproject.toml` accordingly.
 4. Add dependencies: `ase`, `pymatgen`, `numpy`, `matplotlib`, `click`.
@@ -214,7 +214,8 @@ Each phase adds the modules it needs; we don't write all of this upfront.
 - **Slab convergence** — fewer than 4 layers gives wrong surface energies for Cu. Mitigation: convergence test in Phase 3.
 - **Environ availability at ORNL** — may not be in the stock QE module. Mitigation: build locally with Environ patch if needed (Phase 5 prerequisite).
 - **Constant-potential convergence** — FCP iterations can fail to converge near band edges or at strong fields. Mitigation: start with small charges, mix charge slowly.
-- **HPC queue waits** — Frontier queue can be days. Mitigation: develop on Andes; reserve Frontier for production runs only.
+- **Frontier queue waits and short walltimes** — the standard `batch` queue has a 2 h limit at small node counts. Mitigation: keep individual jobs short, parallelize via the convergence-sweep tree.
+- **QE GPU correctness** — the AMD GPU port of Q-E is younger than the CPU code; smoke-test each new system on bulk Cu (which we know cold) before trusting energies on novel slabs.
 
 ## Decision log
 

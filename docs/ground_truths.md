@@ -26,7 +26,7 @@ Initial methodology decisions for the DFT calculations. See [implementation-plan
 - Slab: **4 layers, bottom 2 fixed, 15 Å vacuum, dipole correction**.
 - Solvation roadmap: vacuum → Environ implicit (ε=78.4) → explicit H₂O → ESM-RISM.
 - Potential roadmap: CHE post-processing → ESM-FCP constant-potential.
-- HPC: develop on **ORNL Andes** (CPU), scale production to **Frontier** (AMD GPU).
+- HPC: **ORNL Frontier** (AMD MI250X GPUs) is the production target. Andes (CPU) is available as a debugging fallback.
 
 ### 2026-05-13: Cu oxide DFT gotchas (non-obvious)
 
@@ -38,6 +38,15 @@ Initial methodology decisions for the DFT calculations. See [implementation-plan
 - **Constant-potential ≠ CHE** — to actually study reconstruction at potential, you need ESM-FCP (charged slab + counter-electrode) or ESM-RISM (with explicit electrolyte). This is significantly more expensive and has its own convergence pitfalls.
 - **U_SHE conversion** — DFT energies are referenced to vacuum/Fermi; converting to U vs. SHE requires the absolute potential of SHE (−4.44 V vs. vacuum) and a careful definition of the slab Fermi level reference (typically via a water-layer dipole shift).
 - **Environ may not be in stock QE module** — verify before Phase 5; if absent, build QE with the Environ patch locally on the cluster.
+
+### 2026-05-13: Frontier SLURM conventions
+
+- **Node layout:** 1 AMD EPYC 7A53 (64 cores) + 4 MI250X (8 GCDs total). Standard MPI layout is 8 ranks/node (1 per GCD), 7 cores/rank. The 64th core is reserved for the OS.
+- **Cray module order:** `module purge` → `PrgEnv-{gnu,cray,amd}` → `rocm` → application (`quantum-espresso`). Order matters — application modules load AGAINST whatever toolchain is current.
+- **GPU-aware MPI:** export `MPICH_GPU_SUPPORT_ENABLED=1` before `srun`. Without it, Q-E falls back to CPU↔GPU copies and burns most of the GPU speedup.
+- **srun bindings:** `--gpus-per-task=1 --gpu-bind=closest` is the standard incantation for one rank per GCD.
+- **SBATCH directives:** `--gpus-per-node=8` (one per GCD) + `-c 7` (cores per task). Frontier `batch` partition has a 2 h walltime cap for small node counts.
+- **Q-E GPU build status:** the AMD GPU port is younger than the CPU code; smoke-test new system types against a known reference before trusting energies.
 
 ### Resources to bookmark
 

@@ -73,7 +73,7 @@ def test_cli_sweep_creates_tree_of_inputs(tmp_path: Path) -> None:
         assert (out_root / f"ecutwfc_{value}" / "pw.in").is_file()
 
 
-def test_cli_make_slurm_emits_one_script_per_input(tmp_path: Path) -> None:
+def test_cli_make_slurm_defaults_to_frontier(tmp_path: Path) -> None:
     for name in ("ecutwfc_40", "ecutwfc_60"):
         d = tmp_path / "conv" / name
         d.mkdir(parents=True)
@@ -86,18 +86,61 @@ def test_cli_make_slurm_emits_one_script_per_input(tmp_path: Path) -> None:
             "make-slurm",
             str(tmp_path / "conv"),
             "--account",
-            "CHEM999",
+            "CHM999",
             "--walltime",
             "0:30:00",
         ],
     )
     assert result.exit_code == 0, result.output
-    for name in ("ecutwfc_40", "ecutwfc_60"):
-        sh = tmp_path / "conv" / name / "submit.sh"
-        assert sh.is_file()
-        text = sh.read_text()
-        assert "#SBATCH -A CHEM999" in text
-        assert "#SBATCH -t 0:30:00" in text
+    sh = tmp_path / "conv" / "ecutwfc_40" / "submit.sh"
+    text = sh.read_text()
+    assert "#SBATCH -A CHM999" in text
+    assert "#SBATCH -t 0:30:00" in text
+    # Frontier defaults
+    assert "#SBATCH --gpus-per-node=8" in text
+    assert "--gpu-bind=closest" in text
+
+
+def test_cli_make_slurm_andes_target_omits_gpu_lines(tmp_path: Path) -> None:
+    d = tmp_path / "run"
+    d.mkdir()
+    (d / "pw.in").write_text("&CONTROL\n/\n")
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "make-slurm",
+            str(tmp_path),
+            "--account",
+            "CHM999",
+            "--target",
+            "andes",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    text = (d / "submit.sh").read_text()
+    assert "--gpus-per-node" not in text
+    assert "#SBATCH --ntasks-per-node=32" in text
+
+
+def test_cli_make_slurm_qe_module_override(tmp_path: Path) -> None:
+    d = tmp_path / "run"
+    d.mkdir()
+    (d / "pw.in").write_text("&CONTROL\n/\n")
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "make-slurm",
+            str(tmp_path),
+            "--account",
+            "CHM999",
+            "--qe-module",
+            "quantum-espresso/7.3-gpu",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert "module load quantum-espresso/7.3-gpu" in (d / "submit.sh").read_text()
 
 
 def test_cli_make_slurm_errors_when_no_inputs(tmp_path: Path) -> None:
@@ -105,7 +148,7 @@ def test_cli_make_slurm_errors_when_no_inputs(tmp_path: Path) -> None:
     runner = CliRunner()
     result = runner.invoke(
         main,
-        ["make-slurm", str(tmp_path / "empty"), "--account", "CHEM999"],
+        ["make-slurm", str(tmp_path / "empty"), "--account", "CHM999"],
     )
     assert result.exit_code != 0
     assert "No pw.in" in result.output

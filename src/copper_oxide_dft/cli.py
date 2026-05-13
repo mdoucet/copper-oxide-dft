@@ -226,47 +226,43 @@ def parse_cmd(outputs: tuple[Path, ...], as_json: bool) -> None:
     "root",
     type=click.Path(exists=True, file_okay=False, path_type=Path),
 )
-@click.option("--account", required=True, help="SLURM account (e.g. CHEM000).")
-@click.option("--partition", default="batch", show_default=True)
+@click.option("--account", required=True, help="SLURM account (e.g. CHM999).")
+@click.option(
+    "--target",
+    type=click.Choice(["frontier", "andes"]),
+    default="frontier",
+    show_default=True,
+    help="Cluster preset. Frontier = AMD GPU; Andes = CPU.",
+)
 @click.option("--nodes", type=int, default=1, show_default=True)
-@click.option("--ntasks-per-node", type=int, default=32, show_default=True)
-@click.option("--walltime", default="1:00:00", show_default=True)
+@click.option("--walltime", default="1:00:00", show_default=True, help="HH:MM:SS.")
 @click.option(
     "--qe-module",
-    default="quantum-espresso",
-    show_default=True,
-    help="Module to load on the cluster (e.g. quantum-espresso/7.3).",
-)
-@click.option(
-    "--mpi-launcher",
-    default="srun",
-    show_default=True,
-    help="MPI launcher (srun for SLURM-native, mpirun for OpenMPI-style).",
+    default=None,
+    help=(
+        "Override the QE module to load on the cluster (e.g. quantum-espresso/7.3-gpu)."
+    ),
 )
 def make_slurm(
     root: Path,
     account: str,
-    partition: str,
+    target: str,
     nodes: int,
-    ntasks_per_node: int,
     walltime: str,
-    qe_module: str,
-    mpi_launcher: str,
+    qe_module: str | None,
 ) -> None:
     """Emit submit.sh next to every pw.in under ROOT.
 
     Run on the cluster after copying the sweep tree over, then submit
     each script (e.g. `for d in */; do (cd "$d" && sbatch submit.sh); done`).
     """
-    cfg = SlurmConfig(
-        account=account,
-        partition=partition,
-        nodes=nodes,
-        ntasks_per_node=ntasks_per_node,
-        walltime=walltime,
-        qe_module=qe_module,
-        mpi_launcher=mpi_launcher,
-    )
+    overrides: dict[str, object] = {"nodes": nodes, "walltime": walltime}
+    if qe_module is not None:
+        overrides["qe_module"] = qe_module
+    if target == "frontier":
+        cfg = SlurmConfig.for_frontier(account, **overrides)
+    else:
+        cfg = SlurmConfig.for_andes(account, **overrides)
     scripts = write_slurm_scripts_for_tree(root, cfg)
     if not scripts:
         click.echo(f"No pw.in files found under {root}", err=True)

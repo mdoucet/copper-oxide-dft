@@ -16,7 +16,7 @@ Primarily the project owner (computational scientist at ORNL, new to DFT). Desig
 
 1. **Structure generation** — build bulk, slab, and oxide/Cu interface structures with ASE (Cu(111), Cu₂O(111), CuO(111), adsorbed O/OH at varying coverage).
 2. **QE input generation** — generate `pw.x` input files with project‑wide defaults (PBE+U, Marzari–Vanderbilt smearing, PseudoDojo pseudopotentials, dipole correction).
-3. **HPC job submission** — emit SLURM scripts for ORNL Andes (CPU) and Frontier (GPU).
+3. **HPC job submission** — emit SLURM scripts for ORNL Frontier (AMD GPU); optional Andes (CPU) preset for debugging.
 4. **Output parsing** — extract energies, forces, magnetizations, Fermi levels from QE output.
 5. **Electrochemistry post‑processing** — apply the Computational Hydrogen Electrode (CHE) correction and build Pourbaix‑like (U, pH) stability diagrams.
 6. **(Later phases)** — interface to Environ (implicit solvation), ESM‑FCP (constant‑potential DFT), and AIMD trajectories for surface reconstruction studies.
@@ -26,7 +26,7 @@ Primarily the project owner (computational scientist at ORNL, new to DFT). Desig
 **Input:**
 - High‑level configuration (system type, surface facet, coverage, potential range, pH).
 - Pseudopotential files (PseudoDojo PBE).
-- HPC cluster identity (Andes/Frontier) for submission script tailoring.
+- HPC cluster identity (Frontier by default; Andes available) for submission script tailoring.
 
 **Output:**
 - QE input/output files in a structured directory tree per calculation.
@@ -69,6 +69,6 @@ cuox-dft pourbaix --phases Cu,Cu2O,CuO --u-range -1,1 --ph 7
 - **Slab convention**: 4 layers, bottom 2 fixed at bulk geometry, 15 Å vacuum, dipole correction for asymmetric slabs.
 - **Solvation roadmap**: vacuum → Environ implicit (ε=78.4) → explicit water layer → ESM‑RISM.
 - **Potential roadmap**: CHE post‑processing (Nørskov) → ESM‑FCP constant‑potential DFT.
-- **Compute target**: start on ORNL Andes (CPU, easier to debug); migrate production runs to Frontier (AMD GPU) once converged.
+- **Compute target**: ORNL Frontier (AMD MI250X GPUs, 8 GCDs/node, 64-core EPYC host). Andes (CPU) preset is available for debugging or for runs that don't benefit from GPU acceleration.
 
 See [implementation-plan.md](implementation-plan.md) for the phased roadmap and [ground_truths.md](ground_truths.md) for methodology decisions and known gotchas.
