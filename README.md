@@ -1,110 +1,118 @@
-# AI-Assisted Python Package Template
+# copper-oxide-dft
 
-A minimal, streamlined template for scientists who want to build Python packages using AI assistance—no software engineering experience required.
+DFT pipeline for copper oxide phases on Cu(111) under applied electrochemical potential, using **Quantum ESPRESSO**. The end goal is potential-driven surface reconstruction in aqueous solution; intermediate phases produce a Pourbaix-style stability diagram and validated bulk references.
 
-## 🎯 What is this?
+**Status:** Early development. Phase 0 (toolchain) is complete; Phase 1 (bulk-Cu convergence) is the next scientific milestone. See [docs/implementation-plan.md](docs/implementation-plan.md) for the full 9-phase roadmap and [docs/ground_truths.md](docs/ground_truths.md) for the locked methodology decisions and Cu-oxide DFT gotchas.
 
-This template gives you a clean starting structure for building Python packages with AI tools like **GitHub Copilot** and **Claude Code**. It includes:
-- Basic Python package structure 
-- Example code showing best practices
-- Test setup with pytest
-- **Comprehensive AI instructions** to guide development (works with both Copilot and Claude Code)
+## What this package gives you
 
-It's designed to be **simple enough to understand** but **complete enough to build on**.
+- Python builders for QE input structures (currently bulk fcc Cu).
+- A `pw.x` input file generator with project-standard defaults: PBE-ready namelists, Marzari-Vanderbilt smearing, `ibrav=0`, `conv_thr=1e-8`, sensible PAW cutoffs.
+- Convergence-sweep helpers for `ecutwfc`, k-points, and smearing.
+- SLURM submission scripts targeted at **ORNL Frontier** (AMD MI250X GPUs, 8 GCDs/node, GPU-aware MPICH) with an **Andes** (CPU) preset for debugging.
+- A parser for the converged `pw.x` output (total energy, Fermi energy, magnetization, JOB DONE).
+- An `inspect` command to verify any generated input structurally (cell, composition, layer-by-layer atoms) before committing compute time.
 
-## 🚀 Quick Start (3 steps)
+## Install
 
-### 1. Create your repository
-Click "Use this template" on GitHub, or clone and rename this repo.
-
-### 2. Set up your environment
 ```bash
-# Create and activate a virtual environment
-python -m venv venv
-source venv/bin/activate  # Windows: venv\Scripts\activate
-
-# Install with dev dependencies
+python -m venv venv && source venv/bin/activate
 pip install -e ".[dev]"
 ```
 
-### 3. Customize and start building
-```bash
-# Rename the package (example)
-mv src/package_name src/my_package
+Requires Python 3.10+.
 
-# Update pyproject.toml with your details
-# Then start coding!
-```
+## One-time setup: pseudopotentials
 
-**Read [docs/getting-started.md](docs/getting-started.md) for detailed setup instructions.**
-
-## 🤖 AI-Assisted Development
-
-This template is optimized for working with **GitHub Copilot** and **Claude Code** (and other AI assistants). The key workflow is:
-
-1. **Assess** - Ask the assistant to examine your current code
-2. **Plan** - Get an itemized plan before implementation
-3. **Implement** - Build features step by step
-4. **Test** - Verify each change works
-5. **Review** - Get code review from a specialized sub-agent after major changes
-6. **Record** - Key findings are saved to [docs/ground_truths.md](docs/ground_truths.md) so context persists across sessions
-
-**Configuration files:**
-- **[.github/copilot-instructions.md](.github/copilot-instructions.md)** — the shared workflow and code-quality standards (used by Copilot; also imported by `CLAUDE.md` so Claude Code follows the same rules).
-- **[CLAUDE.md](CLAUDE.md)** — Claude Code entry point. Imports the shared instructions and adds Claude-specific notes.
-- **[.github/agents/](.github/agents/)** — sub-agent prompts for Copilot (design, security, test reviews).
-- **[.claude/agents/](.claude/agents/)** — the same sub-agents in Claude Code's native format.
-
-## 📦 What's Included
-
-```
-├── .github/
-│   ├── copilot-instructions.md    # Shared AI workflow + standards
-│   ├── agents/                    # Copilot sub-agent prompts
-│   └── workflows/                 # CI/CD (tests, linting)
-├── .claude/
-│   └── agents/                    # Claude Code sub-agent definitions
-├── CLAUDE.md                      # Claude Code entry point (imports the shared instructions)
-├── src/package_name/              # Your Python package
-│   ├── __init__.py                # Package initialization
-│   └── cli.py                     # Simple "Hello AI" CLI example
-├── tests/
-│   └── test_cli.py                # Example CLI tests
-├── docs/
-│   ├── getting-started.md         # Setup guide
-│   └── ground_truths.md           # Key findings & decisions log
-├── pyproject.toml                 # Package configuration
-└── README.md                      # This file
-```
-
-## 🧪 Running Tests
+Download a Cu pseudopotential from [PseudoDojo](http://www.pseudo-dojo.org/) (PBE, scalar-relativistic, standard accuracy, PAW), drop it into a directory, and point an env var at it:
 
 ```bash
-pytest                              # Run all tests
-pytest --cov=src/package_name      # With coverage report
-pytest -v                           # Verbose output
+mkdir -p ~/pseudos
+mv Cu.upf ~/pseudos/
+export CUOXDFT_PSEUDO_DIR=~/pseudos
 ```
 
-## 💡 Tips for Getting Started
+Add the `export` line to your `~/.bashrc` / `~/.zshrc` so it persists. O and H pseudopotentials get added when Phase 2 (oxide bulks) lands.
 
-1. **Start simple** - Replace the example code with one function you need
-2. **Describe your project** - Fill out [docs/project.md](docs/project.md) to help the AI understand what you're building
-3. **Let AI help** - Ask Copilot or Claude to assess and plan before implementing
-4. **Test as you go** - Run pytest after each feature
-5. **Keep ground truths** - Key findings are logged in [docs/ground_truths.md](docs/ground_truths.md) so AI remembers context between sessions
-6. **Commit often** - Small commits are easier to track
-7. **Read the AI instructions** - [.github/copilot-instructions.md](.github/copilot-instructions.md) (also imported by [CLAUDE.md](CLAUDE.md)) explains the recommended workflow
+## Quickstart
 
-## 🆘 Getting Help
+### Generate a single pw.x input and verify it
 
-- **Ask your AI assistant directly** (Copilot or Claude Code): "Assess my code and suggest next steps"
-- **Read the getting started guide**: [docs/getting-started.md](docs/getting-started.md)
-- **Check the example code**: See [src/package_name/cli.py](src/package_name/cli.py) for a simple CLI pattern
+```bash
+copper-oxide-dft bulk-cu --out runs/bulk_cu/pw.in
+copper-oxide-dft inspect runs/bulk_cu/pw.in
+```
 
-## 📄 License
+`inspect` decodes the input back into an ASE structure and prints cell vectors, composition, and a layer-by-layer atom breakdown — the same view will make slab/oxide structures (Phase 3 onward) visually verifiable before you spend cluster hours on them.
 
-BSD 3-Clause License - see [LICENSE](LICENSE) file for details.
+### Phase 1 convergence sweep -> Frontier
 
----
+```bash
+# 1) Generate a sweep tree (local).
+copper-oxide-dft sweep \
+  --param ecutwfc --values 40,60,80,100 \
+  --out runs/conv_ecutwfc
 
-**Ready?** Open [docs/getting-started.md](docs/getting-started.md) to begin, or ask Copilot / Claude Code: "Help me customize this template for my project."
+# 2) Emit a submit.sh next to every pw.in (defaults target Frontier).
+copper-oxide-dft make-slurm runs/conv_ecutwfc \
+  --account <your-project> \
+  --qe-module quantum-espresso/<version>-gpu \
+  --walltime 0:30:00
+
+# 3) Ship to Frontier and submit.
+rsync -av runs/conv_ecutwfc/ frontier:scratch/conv_ecutwfc/
+ssh frontier
+for d in scratch/conv_ecutwfc/*/; do (cd "$d" && sbatch submit.sh); done
+
+# 4) Pull results back, parse.
+rsync -av frontier:scratch/conv_ecutwfc/ runs/conv_ecutwfc/
+copper-oxide-dft parse --json runs/conv_ecutwfc/*/pw.out
+```
+
+### Local workstation (Ubuntu, CPU)
+
+See [docs/local-workstation.md](docs/local-workstation.md) for a full end-to-end walkthrough on a Linux box (including a note on AMD consumer GPUs + Q-E).
+
+## CLI reference
+
+| Command | Purpose |
+|---|---|
+| `bulk-cu` | Generate a bulk-Cu pw.x input (scf / relax / vc-relax). |
+| `sweep` | Generate a tree of pw.x inputs varying `ecutwfc`, `kpts`, or `degauss`. |
+| `inspect` | Decode a pw.x input and print cell, composition, layer-by-layer atoms. |
+| `make-slurm` | Emit submit.sh next to each pw.in (target: Frontier or Andes). |
+| `parse` | Read pw.x stdout files for total energy, Fermi energy, magnetization, JOB DONE. |
+
+Every command has `--help`.
+
+## Project layout
+
+```
+src/copper_oxide_dft/
+├── structure_builder.py    # ASE constructors + layer summaries
+├── qe_input.py             # pw.x input generation (scf/relax/vc-relax)
+├── convergence.py          # ecutwfc / kpts / degauss sweep helpers
+├── parse.py                # pw.x stdout parsing
+├── submit.py               # SLURM scaffolding (Frontier, Andes)
+└── cli.py                  # Click CLI
+
+docs/
+├── project.md              # scope and dependencies
+├── implementation-plan.md  # 9-phase roadmap (current focus: Phase 1)
+├── ground_truths.md        # methodology decisions, Cu-oxide DFT gotchas, Frontier conventions
+└── local-workstation.md    # Ubuntu walkthrough
+```
+
+## Development
+
+```bash
+pytest                     # all tests with coverage
+ruff check src tests       # lint
+ruff format src tests      # format
+```
+
+CI-ready: ~50 tests, ~99% coverage on `src/copper_oxide_dft/`.
+
+## License
+
+BSD-3-Clause. See [LICENSE](LICENSE).

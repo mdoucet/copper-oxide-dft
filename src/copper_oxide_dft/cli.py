@@ -25,7 +25,11 @@ from copper_oxide_dft.qe_input import (
     DEFAULT_ECUTWFC_RY,
     write_pw_input,
 )
-from copper_oxide_dft.structure_builder import CU_LATTICE_PARAMETER_ANG, build_bulk_cu
+from copper_oxide_dft.structure_builder import (
+    CU_LATTICE_PARAMETER_ANG,
+    build_bulk_cu,
+    summarize_layers,
+)
 from copper_oxide_dft.submit import SlurmConfig, write_slurm_scripts_for_tree
 
 
@@ -218,6 +222,50 @@ def parse_cmd(outputs: tuple[Path, ...], as_json: bool) -> None:
             f"({row['total_energy_ev']:.4f} eV)  "
             f"E_F={row['fermi_energy_ev']}  mag={row['total_magnetization_bohr']}  "
             f"done={row['job_done']}"
+        )
+
+
+@main.command("inspect")
+@click.argument(
+    "input_file",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+)
+@click.option(
+    "--layer-tol",
+    type=float,
+    default=0.1,
+    show_default=True,
+    help="z-coordinate tolerance for grouping atoms into layers (A).",
+)
+def inspect_cmd(input_file: Path, layer_tol: float) -> None:
+    """Decode a pw.x input file and print a structural summary.
+
+    Use this before submitting jobs to verify cell, composition, and
+    layer-by-layer atom positions. For slabs, the layer summary makes
+    surface termination and depth ordering trivially visible.
+    """
+    import numpy as np
+    from ase.io.espresso import read_espresso_in
+
+    with input_file.open() as fh:
+        atoms = read_espresso_in(fh)
+
+    click.echo(f"File:        {input_file}")
+    click.echo(f"Composition: {atoms.get_chemical_formula()} ({len(atoms)} atoms)")
+    click.echo(f"Volume:      {atoms.get_volume():.4f} A^3")
+    click.echo("Cell vectors (A):")
+    for label, vec in zip("abc", atoms.cell, strict=True):
+        norm = float(np.linalg.norm(vec))
+        click.echo(
+            f"  {label}: ({vec[0]:9.4f} {vec[1]:9.4f} {vec[2]:9.4f})  |{label}| = {norm:.4f}"
+        )
+
+    layers = summarize_layers(atoms, tol=layer_tol)
+    click.echo(f"\nLayers grouped by z (tol={layer_tol} A):")
+    for i, layer in enumerate(layers):
+        click.echo(
+            f"  [{i:2d}] z = {layer.z:8.4f} A  thickness = {layer.thickness:.4f} A"
+            f"  {layer.composition_label()}  ({layer.total_atoms} atoms)"
         )
 
 

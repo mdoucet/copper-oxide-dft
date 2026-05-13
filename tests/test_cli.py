@@ -73,6 +73,35 @@ def test_cli_sweep_creates_tree_of_inputs(tmp_path: Path) -> None:
         assert (out_root / f"ecutwfc_{value}" / "pw.in").is_file()
 
 
+def test_cli_inspect_summarizes_bulk_cu(tmp_path: Path) -> None:
+    """End-to-end: generate a bulk-Cu pw.in via the CLI, then inspect it."""
+    pseudo_dir = tmp_path / "pseudos"
+    pseudo_dir.mkdir()
+    (pseudo_dir / "Cu.upf").write_text("")
+
+    pw_in = tmp_path / "bulk_cu.in"
+    runner = CliRunner()
+    assert (
+        runner.invoke(
+            main,
+            [
+                "bulk-cu",
+                "--out",
+                str(pw_in),
+                "--pseudo-dir",
+                str(pseudo_dir),
+            ],
+        ).exit_code
+        == 0
+    )
+
+    result = runner.invoke(main, ["inspect", str(pw_in)])
+    assert result.exit_code == 0, result.output
+    assert "Composition: Cu (1 atoms)" in result.output
+    assert "Cell vectors" in result.output
+    assert "Cux1" in result.output  # one Cu atom in one layer
+
+
 def test_cli_make_slurm_defaults_to_frontier(tmp_path: Path) -> None:
     for name in ("ecutwfc_40", "ecutwfc_60"):
         d = tmp_path / "conv" / name
