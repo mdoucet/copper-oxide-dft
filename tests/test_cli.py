@@ -73,6 +73,44 @@ def test_cli_sweep_creates_tree_of_inputs(tmp_path: Path) -> None:
         assert (out_root / f"ecutwfc_{value}" / "pw.in").is_file()
 
 
+def test_cli_make_slurm_emits_one_script_per_input(tmp_path: Path) -> None:
+    for name in ("ecutwfc_40", "ecutwfc_60"):
+        d = tmp_path / "conv" / name
+        d.mkdir(parents=True)
+        (d / "pw.in").write_text("&CONTROL\n/\n")
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "make-slurm",
+            str(tmp_path / "conv"),
+            "--account",
+            "CHEM999",
+            "--walltime",
+            "0:30:00",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    for name in ("ecutwfc_40", "ecutwfc_60"):
+        sh = tmp_path / "conv" / name / "submit.sh"
+        assert sh.is_file()
+        text = sh.read_text()
+        assert "#SBATCH -A CHEM999" in text
+        assert "#SBATCH -t 0:30:00" in text
+
+
+def test_cli_make_slurm_errors_when_no_inputs(tmp_path: Path) -> None:
+    (tmp_path / "empty").mkdir()
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        ["make-slurm", str(tmp_path / "empty"), "--account", "CHEM999"],
+    )
+    assert result.exit_code != 0
+    assert "No pw.in" in result.output
+
+
 def test_cli_parse_emits_json(tmp_path: Path) -> None:
     output = tmp_path / "scf.out"
     output.write_text(

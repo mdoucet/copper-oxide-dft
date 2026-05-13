@@ -26,6 +26,7 @@ from copper_oxide_dft.qe_input import (
     write_pw_input,
 )
 from copper_oxide_dft.structure_builder import CU_LATTICE_PARAMETER_ANG, build_bulk_cu
+from copper_oxide_dft.submit import SlurmConfig, write_slurm_scripts_for_tree
 
 
 @click.group()
@@ -218,6 +219,60 @@ def parse_cmd(outputs: tuple[Path, ...], as_json: bool) -> None:
             f"E_F={row['fermi_energy_ev']}  mag={row['total_magnetization_bohr']}  "
             f"done={row['job_done']}"
         )
+
+
+@main.command("make-slurm")
+@click.argument(
+    "root",
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+)
+@click.option("--account", required=True, help="SLURM account (e.g. CHEM000).")
+@click.option("--partition", default="batch", show_default=True)
+@click.option("--nodes", type=int, default=1, show_default=True)
+@click.option("--ntasks-per-node", type=int, default=32, show_default=True)
+@click.option("--walltime", default="1:00:00", show_default=True)
+@click.option(
+    "--qe-module",
+    default="quantum-espresso",
+    show_default=True,
+    help="Module to load on the cluster (e.g. quantum-espresso/7.3).",
+)
+@click.option(
+    "--mpi-launcher",
+    default="srun",
+    show_default=True,
+    help="MPI launcher (srun for SLURM-native, mpirun for OpenMPI-style).",
+)
+def make_slurm(
+    root: Path,
+    account: str,
+    partition: str,
+    nodes: int,
+    ntasks_per_node: int,
+    walltime: str,
+    qe_module: str,
+    mpi_launcher: str,
+) -> None:
+    """Emit submit.sh next to every pw.in under ROOT.
+
+    Run on the cluster after copying the sweep tree over, then submit
+    each script (e.g. `for d in */; do (cd "$d" && sbatch submit.sh); done`).
+    """
+    cfg = SlurmConfig(
+        account=account,
+        partition=partition,
+        nodes=nodes,
+        ntasks_per_node=ntasks_per_node,
+        walltime=walltime,
+        qe_module=qe_module,
+        mpi_launcher=mpi_launcher,
+    )
+    scripts = write_slurm_scripts_for_tree(root, cfg)
+    if not scripts:
+        click.echo(f"No pw.in files found under {root}", err=True)
+        raise SystemExit(1)
+    for s in scripts:
+        click.echo(f"Wrote {s}")
 
 
 if __name__ == "__main__":
