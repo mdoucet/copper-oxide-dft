@@ -1,9 +1,8 @@
 """Quantum ESPRESSO ``pw.x`` input file generation with project defaults.
 
 Wraps :func:`ase.io.espresso.write_espresso_in` with the project's standard
-choices (Marzari–Vanderbilt smearing, PBE+U-ready namelist structure,
-sensible SCF convergence thresholds). Later phases extend this with relax,
-vc-relax, and Hubbard-U-aware variants.
+choices (Marzari-Vanderbilt smearing, PBE+U-ready namelist structure,
+sensible SCF convergence thresholds).
 
 Pseudopotentials are looked up relative to ``pseudo_dir``. If not passed
 explicitly, the environment variable ``CUOXDFT_PSEUDO_DIR`` is used; the
@@ -28,8 +27,10 @@ DEFAULT_ECUTWFC_RY = 80.0
 the Phase 1 convergence sweep."""
 
 DEFAULT_DEGAUSS_RY = 0.02
-"""Smearing width for Marzari–Vanderbilt cold smearing. Required for metallic Cu;
+"""Smearing width for Marzari-Vanderbilt cold smearing. Required for metallic Cu;
 see docs/ground_truths.md (Cu oxide DFT gotchas)."""
+
+SUPPORTED_CALCULATIONS = frozenset({"scf", "nscf", "relax", "vc-relax", "md"})
 
 
 def _resolve_pseudo_dir(pseudo_dir: str | os.PathLike[str] | None) -> Path:
@@ -37,8 +38,8 @@ def _resolve_pseudo_dir(pseudo_dir: str | os.PathLike[str] | None) -> Path:
         env = os.environ.get(PSEUDO_DIR_ENV_VAR)
         if not env:
             raise FileNotFoundError(
-                f"Pseudopotential directory not provided and ${PSEUDO_DIR_ENV_VAR} is unset. "
-                "Pass `pseudo_dir=` or set the environment variable."
+                f"Pseudopotential directory not provided and ${PSEUDO_DIR_ENV_VAR}"
+                " is unset. Pass `pseudo_dir=` or set the environment variable."
             )
         pseudo_dir = env
     resolved = Path(pseudo_dir).expanduser().resolve()
@@ -47,11 +48,12 @@ def _resolve_pseudo_dir(pseudo_dir: str | os.PathLike[str] | None) -> Path:
     return resolved
 
 
-def write_scf_input(
+def write_pw_input(
     atoms: Atoms,
     out_path: str | os.PathLike[str],
     pseudopotentials: Mapping[str, str],
     *,
+    calculation: str = "scf",
     prefix: str = "calc",
     ecutwfc: float = DEFAULT_ECUTWFC_RY,
     ecutrho: float | None = None,
@@ -61,7 +63,7 @@ def write_scf_input(
     pseudo_dir: str | os.PathLike[str] | None = None,
     extra_input_data: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> Path:
-    """Write a ``pw.x`` SCF input file with project-standard defaults.
+    """Write a ``pw.x`` input file with project-standard defaults.
 
     Args:
         atoms: Structure to compute. Cell and positions are written directly;
@@ -70,12 +72,15 @@ def write_scf_input(
             created if needed.
         pseudopotentials: Mapping from chemical symbol to UPF filename
             (e.g. ``{"Cu": "Cu.upf"}``). Files must live in ``pseudo_dir``.
+        calculation: pw.x calculation type. Must be one of
+            :data:`SUPPORTED_CALCULATIONS`. ``"vc-relax"`` and ``"relax"``
+            automatically populate the IONS / CELL namelists with BFGS defaults.
         prefix: ``CONTROL.prefix`` value (used by QE for output filenames).
         ecutwfc: Plane-wave wavefunction cutoff (Ry).
         ecutrho: Charge-density cutoff (Ry). Defaults to ``8 * ecutwfc``,
             which is appropriate for PAW pseudopotentials.
-        kpts: Monkhorst–Pack k-point grid.
-        koffset: Grid offset (use ``(1, 1, 1)`` for shifted, Γ-excluded).
+        kpts: Monkhorst-Pack k-point grid.
+        koffset: Grid offset (use ``(1, 1, 1)`` for shifted, gamma-excluded).
         degauss: Smearing width (Ry).
         pseudo_dir: Directory containing UPF files. Falls back to
             ``$CUOXDFT_PSEUDO_DIR`` if ``None``.
@@ -86,9 +91,15 @@ def write_scf_input(
         Path to the written input file.
 
     Raises:
+        ValueError: If ``calculation`` is not in :data:`SUPPORTED_CALCULATIONS`.
         FileNotFoundError: If ``pseudo_dir`` and ``$CUOXDFT_PSEUDO_DIR`` are
             both missing or do not point to an existing directory.
     """
+    if calculation not in SUPPORTED_CALCULATIONS:
+        raise ValueError(
+            f"Unsupported calculation={calculation!r}; "
+            f"expected one of {sorted(SUPPORTED_CALCULATIONS)}"
+        )
     pseudo_dir_resolved = _resolve_pseudo_dir(pseudo_dir)
 
     if ecutrho is None:
@@ -96,7 +107,7 @@ def write_scf_input(
 
     input_data: dict[str, dict[str, Any]] = {
         "control": {
-            "calculation": "scf",
+            "calculation": calculation,
             "prefix": prefix,
             "pseudo_dir": str(pseudo_dir_resolved),
             "outdir": "./tmp",
@@ -118,6 +129,10 @@ def write_scf_input(
             "electron_maxstep": 200,
         },
     }
+    if calculation in ("relax", "vc-relax", "md"):
+        input_data["ions"] = {"ion_dynamics": "bfgs"}
+    if calculation == "vc-relax":
+        input_data["cell"] = {"cell_dynamics": "bfgs", "press": 0.0}
 
     if extra_input_data:
         for namelist, overrides in extra_input_data.items():

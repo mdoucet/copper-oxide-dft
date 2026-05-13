@@ -45,3 +45,41 @@ def test_cli_bulk_cu_writes_input_file(tmp_path: Path) -> None:
     contents = out_file.read_text()
     assert "ecutwfc" in contents.lower()
     assert "K_POINTS" in contents
+
+
+def test_cli_sweep_creates_tree_of_inputs(tmp_path: Path) -> None:
+    pseudo_dir = tmp_path / "pseudos"
+    pseudo_dir.mkdir()
+    (pseudo_dir / "Cu.upf").write_text("")
+
+    out_root = tmp_path / "conv"
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "sweep",
+            "--param",
+            "ecutwfc",
+            "--values",
+            "40,60,80",
+            "--out",
+            str(out_root),
+            "--pseudo-dir",
+            str(pseudo_dir),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    for value in (40, 60, 80):
+        assert (out_root / f"ecutwfc_{value}" / "pw.in").is_file()
+
+
+def test_cli_parse_emits_json(tmp_path: Path) -> None:
+    output = tmp_path / "scf.out"
+    output.write_text(
+        "!    total energy = -100.0 Ry\nthe Fermi energy is 3.0 ev\nJOB DONE.\n"
+    )
+    runner = CliRunner()
+    result = runner.invoke(main, ["parse", "--json", str(output)])
+    assert result.exit_code == 0, result.output
+    assert '"total_energy_ry": -100.0' in result.output
+    assert '"job_done": true' in result.output
