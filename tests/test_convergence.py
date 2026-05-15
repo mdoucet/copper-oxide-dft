@@ -10,7 +10,7 @@ from copper_oxide_dft.convergence import (
     SUPPORTED_SWEEP_PARAMETERS,
     sweep_convergence,
 )
-from copper_oxide_dft.structure_builder import build_bulk_cu
+from copper_oxide_dft.structure_builder import build_bulk_cu, build_bulk_cu2o
 
 
 @pytest.fixture
@@ -129,4 +129,33 @@ def test_sweep_rejects_param_in_base_kwargs(tmp_path: Path, pseudo_dir: Path) ->
 
 
 def test_supported_sweep_parameters_set() -> None:
-    assert frozenset({"ecutwfc", "kpts", "degauss"}) == SUPPORTED_SWEEP_PARAMETERS
+    assert frozenset(
+        {"ecutwfc", "kpts", "degauss", "hubbard_u"}
+    ) == SUPPORTED_SWEEP_PARAMETERS
+
+
+def test_sweep_hubbard_u_writes_one_input_per_value(
+    tmp_path: Path, pseudo_dir: Path
+) -> None:
+    """U sweep on Cu2O: each input must carry Hubbard_U(1) with the swept value."""
+    (pseudo_dir / "O.upf").write_text("")
+    atoms = build_bulk_cu2o()
+    paths = sweep_convergence(
+        atoms,
+        out_root=tmp_path / "u_sweep",
+        pseudopotentials={"Cu": "Cu.upf", "O": "O.upf"},
+        param="hubbard_u",
+        values=[0.0, 2.0, 4.0, 6.0],
+        pseudo_dir=pseudo_dir,
+    )
+    assert {p.parent.name for p in paths} == {
+        "hubbard_u_0p00",
+        "hubbard_u_2p00",
+        "hubbard_u_4p00",
+        "hubbard_u_6p00",
+    }
+    text = (tmp_path / "u_sweep" / "hubbard_u_4p00" / "pw.in").read_text().lower()
+    # Cu is species 1 in Cu2O; non-magnetic so nspin defaults to 1.
+    assert "hubbard_u(1)" in text
+    assert "4.0" in text
+    assert "nspin" in text

@@ -48,6 +48,129 @@ Initial methodology decisions for the DFT calculations. See [implementation-plan
 - **SBATCH directives:** `--gpus-per-node=8` (one per GCD) + `-c 7` (cores per task). Frontier `batch` partition has a 2 h walltime cap for small node counts.
 - **Q-E GPU build status:** the AMD GPU port is younger than the CPU code; smoke-test new system types against a known reference before trusting energies.
 
+### 2026-05-14: Phase 4 CHE Pourbaix — implementation choices and validation
+
+Implemented the Computational Hydrogen Electrode (CHE) Pourbaix construction
+for solid Cu / Cu₂O / CuO phases ([che.py](../src/copper_oxide_dft/che.py),
+[pourbaix.py](../src/copper_oxide_dft/pourbaix.py)). Decisions worth not
+re-deriving:
+
+- **Reservoir convention**: per-Cu free energy referenced to bulk Cu(metal)
+  and H₂O(l). Oxygen chemical potential follows from H₂O ⇌ O + 2(H⁺ + e⁻):
+  `μ(O) = μ(H₂O) − μ(H₂) + 2·eU + 2·k_BT·ln10·pH`. This is the standard
+  Hansen/Nørskov/Persson formulation; do NOT switch to an O₂-based reservoir
+  without re-deriving signs (and O₂ has the notorious DFT triplet error of
+  ~0.4 eV anyway).
+- **Per-Cu indexing**: each phase reports ΔG normalized by Cu atom count.
+  At any (U, pH), the stable phase is the one with the minimum ΔG_per_Cu.
+  Cu metal gives ΔG_per_Cu = 0 by construction.
+- **Slopes**: Cu₂O has slope -1 eV/V vs. U (n_O/n_Cu = 1/2 × -2); CuO has
+  slope -2 eV/V. Steeper slope = needs higher U to stabilize. This is why
+  CuO appears only at high U + high pH in the diagram.
+- **Default U value (Hubbard U on Cu 3d)**: 4.0 eV
+  ([DEFAULT_HUBBARD_U_CU_3D_EV](../src/copper_oxide_dft/qe_input.py)). Mosey
+  & Carter pick; in the typical literature range for Cu oxides. Plan: refine
+  via `hp.x` linear response in Phase 2 before claiming any quantitative
+  number.
+- **ZPE / TΔS literature defaults** (at 298.15 K, used when the user passes
+  only DFT total energies): H₂ ZPE = 0.27 eV, TΔS = 0.40 eV; H₂O ZPE = 0.56
+  eV, TΔS = 0.67 eV (H₂O entropy is the gas-at-0.035-bar convention so
+  μ(H₂O) approximates liquid). Source: Nørskov 2004 (PCCP 10, 3722 supp
+  tables).
+- **AFM CuO species splitting**: ASE's QE writer splits Cu into two species
+  ("Cu" + magmom=+1, "Cu1" + magmom=-1) when per-atom magmoms are
+  heterogeneous. Both sub-species need the SAME Hubbard U; the
+  [`spin_and_hubbard_overrides`](../src/copper_oxide_dft/qe_input.py) helper
+  mirrors ASE's algorithm so `Hubbard_U(1)` AND `Hubbard_U(2)` both get
+  emitted. We discovered this empirically the first time tests ran; if you
+  hand-roll a QE input bypassing the helper, remember to duplicate the U
+  term for both Cu sublattices.
+
+**Validation (literature ΔG_f defaults, NIST 298 K)**: with experimental
+formation free energies plugged into the CHE machinery, the resulting
+diagram reproduces the textbook Cu Pourbaix qualitatively — Cu metal at
+reducing potentials, Cu₂O in a narrow band, CuO at high U / high pH, slopes
+~-59 mV/pH-unit. The literature-default answer at (U = -0.4 V SHE, pH 7) is
+**Cu(metal) stable**, with Cu₂O ΔG_per_Cu = +0.45 eV and CuO ΔG_per_Cu =
++1.09 eV. This is consistent with the experimental observation that native
+copper oxide is electrochemically reduced under cathodic polarization in
+neutral solutions.
+
+**Limitations / known absences (Phase 4 is intentionally limited)**:
+- Solid-only — no Cu²⁺(aq), no HCuO₂⁻(aq), no Cu(OH)₂. The experimental
+  Pourbaix has an active corrosion region at low pH that ours treats as a
+  Cu(metal) region. Adding it requires aqueous-ion energetics and an
+  activity assumption.
+- Bulk only — no surface termination effects, no adsorbed OH or O, no slab
+  energetics. These enter in Phase 4 v2 (adsorbates on Cu(111)).
+- DFT energies are placeholders (literature ΔG_f) until Phase 1-2 Frontier
+  runs land. Use `make-pourbaix-inputs` to generate the QE jobs, then pass
+  `--energies <json>` to the `pourbaix` command.
+
+### 2026-05-14: Phase 1+2 Python tooling — closing the loop
+
+Added the analyze/aggregate/config layer so the Pourbaix CLI can consume real DFT+U energies without hand-editing JSON. End-to-end flow once Frontier jobs finish:
+
+```text
+make-pourbaix-inputs ROOT         # write 5 pw.in (Cu, Cu2O, CuO, H2, H2O)
+make-slurm ROOT --account=...     # wrap each in submit.sh
+# (submit + wait on Frontier)
+aggregate-pourbaix-energies ROOT --out energies.json   # parse pw.out tree
+pourbaix --u -0.4 --ph 7 --energies energies.json      # produces real ΔG
+```
+
+**Per-formula-unit normalization** (`aggregate-pourbaix-energies`): pw.x reports total energy per cell. We divide by formula-units-per-cell using the conventional cells emitted by `build_bulk_*`: bulk_cu (1 atom = 1 f.u.), bulk_cu2o (6 atoms = 2 f.u.), bulk_cuo (8 atoms = 4 f.u.). Molecules are one f.u. each. Skipping this division silently scales Cu2O/CuO ΔG by 2× / 4× — easy to miss because the Pourbaix diagram still has the right topology with wrong slopes.
+
+**Convergence-test semantics** (`analyze_sweep` in [analysis.py](../src/copper_oxide_dft/analysis.py)): "smallest converged value" excludes the largest sweep point itself. A single value can't prove its own convergence; if only the asymptote qualifies, the analyzer returns `None` and the `sweep-analyze` CLI exits non-zero. The user must extend the sweep upward. This is the difference between "I have a number" and "I have a defensible number."
+
+**Per-atom energy threshold** (`DEFAULT_CONVERGENCE_THRESHOLD_MEV_PER_ATOM = 1.0`): matches the Phase 1 success criterion. Total-energy comparison would fail across system sizes (a tighter cutoff costs more meV for a bigger cell); per-atom keeps the threshold meaningful when the same analyzer is reused for slabs in Phase 3.
+
+**Hubbard-U sweep** is now a first-class option in [convergence.py](../src/copper_oxide_dft/convergence.py): `sweep_convergence(param="hubbard_u", values=[0,2,4,6,8])` writes one pw.in per U value, routed through `spin_and_hubbard_overrides` so AFM CuO's two Cu sub-species both receive the U term. Directory labels use `0p00` / `4p00` / `6p00` to keep filesystem paths clean.
+
+**hp.x input writer** ([qe_input.write_hp_input](../src/copper_oxide_dft/qe_input.py)): emits a minimal `&INPUTHP/` namelist for self-consistent Hubbard-U linear response. Critical detail: `prefix` here MUST match the parent SCF's `CONTROL.prefix` or hp.x can't find the saved wavefunctions. We have not exercised this against a real Frontier QE build yet — verify the namelist key names against the cluster's hp.x version before relying on the result.
+
+**ProjectConfig** ([config.py](../src/copper_oxide_dft/config.py)): JSON-backed store for "what's locked in for system X". Schema is forward-compatible — unknown keys round-trip cleanly, so Phase 3 slab parameters (vacuum width, layer count) can land later without a schema bump. `schema_version` is checked on load; bump it only on incompatible changes.
+
+### 2026-05-14 (later): Phase 3–8 Python scaffolding (overnight run)
+
+Landed Python-only scaffolds for every remaining phase so the user can return next week with all of the prep work done and only the Frontier-side execution left.
+
+**Phase 3 (surfaces in vacuum)** — [structure_builder.py](../src/copper_oxide_dft/structure_builder.py):
+- `build_cu111_slab(layers, supercell, vacuum_ang, fix_bottom_layers)` — wraps ASE's `fcc111`, applies `FixAtoms` to the bottom layers. **ASE vacuum quirk**: the `vacuum` argument adds the requested thickness *on each side*, so the z-cell grows by 2×vacuum when you double it. Tests assume this.
+- `build_cu2o_111_slab(layers, supercell, …)` and `build_cuo_111_slab(layers, supercell, …)` — minimal ASE-`surface`-based builders. They return *a* (111) termination, not the lowest-energy one; verify via `inspect` before submitting. Termination optimization is a Phase 3 finding, not a baked-in default.
+- `add_oxygen_adsorbates(slab, coverage_ml, site, adsorbate)` — picks `round(coverage_ml * n_surface)` top-layer atoms and places O or OH at top/bridge/fcc/hcp sites. **Round-to-zero fails loudly**: requesting 1/9 ML on a 2×2 cell raises instead of silently dropping the adsorbate.
+- `surface_energy_ev_per_a2(slab_E, bulk_E_per_atom, n_atoms, area, n_surfaces)` — `n_surfaces=2` for symmetric slabs, `1` for dipole-corrected asymmetric. Cu(111) literature is ~0.08 eV/Å² (≈ 1.3 J/m²).
+
+**Phase 4 v2 (adsorbate Pourbaix)** — [che.py](../src/copper_oxide_dft/che.py) + [pourbaix.py](../src/copper_oxide_dft/pourbaix.py):
+- `AdsorbateState` dataclass: a coverage state (n_O, n_OH) on a fixed Cu(111) supercell. ZPE/TS for adsorbates go in this object's `zpe_ev` / `ts_ev` fields, not in the reservoir.
+- `adsorbate_state_relative_free_energy_ev(state, clean, refs, U, pH)` returns ΔG of the covered surface relative to the clean reference using `ΔG = G_state − G_clean − n_O·μ(O) − n_OH·μ(OH)`. **Critical sign convention** — there is *no* extra CHE shift on top because the U/pH dependence is already inside μ(O) and μ(OH). Adding one would double-count.
+- `adsorbate_phase_diagram(states, clean, refs, …)` reuses the bulk `PourbaixDiagram` shape so plotting works unchanged. **Limit**: all states must share the same supercell (absolute energies don't subtract cleanly across cells); per-area normalization would change that and is deferred.
+
+**Phase 5 (Environ implicit solvation)** — [environ.py](../src/copper_oxide_dft/environ.py):
+- `write_environ_input(out_path, environ_type='water', …)` emits a complete `environ.in` with the &ENVIRON, &BOUNDARY, &ELECTROSTATIC namelists. Defaults: water (ε=78.36), electronic cavity (Andreussi), parabolic PBC correction along z (pbc_dim=2).
+- **Requires the Environ-patched QE build**, not stock. Verify it's available on Frontier before relying on this — if absent we need a local QE rebuild with the Environ patch.
+
+**Phase 7 (ESM-FCP constant-potential DFT)** — [qe_input.py](../src/copper_oxide_dft/qe_input.py):
+- `fcp_overrides_for_potential(u_she_v, esm_bc='bc2', …)` builds the override dict that combines &CONTROL.lfcp=.true., &SYSTEM.assume_isolated='esm' + esm_bc, and &FCP.fcp_mu.
+- **U → fcp_mu conversion**: `fcp_mu (Ry) = -(SHE_absolute + U) / EV_PER_RYDBERG`. `SHE_ABSOLUTE_POTENTIAL_V = 4.44` (Trasatti). The function exposes this as a parameter so a different convention (Hansen 4.28, Kelvin 4.60, etc.) can be plugged in.
+- **Sign sanity**: more positive U pulls electrons out → fcp_mu becomes more negative (deeper below vacuum). Test enforces this.
+- Composes cleanly with `spin_and_hubbard_overrides` by merging namelist dicts (caller-side merge — the helpers do not auto-combine, to keep responsibilities single).
+
+**Phase 6 prep (explicit water layer)** — [structure_builder.py](../src/copper_oxide_dft/structure_builder.py):
+- `add_explicit_water_layer(slab, n_waters, height_ang, layer_thickness_ang, seed)` distributes `n_waters` H₂O molecules on a near-square grid above the slab top, with random orientations driven by a deterministic seed. **Starting guess only** — production runs need MD pre-equilibration (classical or short AIMD). The seed makes runs reproducible without baking in a specific water arrangement.
+
+**Phase 8 prep (NEB)** — [neb.py](../src/copper_oxide_dft/neb.py):
+- `write_neb_input(out_path, endpoints, n_intermediate_images, …)` emits a `neb.x` input with two pinned endpoints and intermediate images filled in by QE's own interpolation. Defaults match the QE NEB tutorial: Broyden optimizer, climbing-image auto-switch, k_min=0.1/k_max=0.3 Ry/Bohr spring bounds.
+- Endpoint mismatch (atom count or formula) raises rather than producing a malformed input that QE would only complain about hours into a run.
+
+**Cross-cutting test coverage**: 165 tests, 97% line coverage across 12 modules. Ruff clean. The full Phase-4 user story (bulk Pourbaix end-to-end) and the Phase-4 v2 surface story both run on synthetic inputs in CI without Frontier.
+
+**Known sharp edges for the next session**:
+1. The Environ binary on Frontier is unverified — `write_environ_input` will produce a syntactically valid `environ.in` but the *patched* QE that consumes it may not be installed. First step in Phase 5 production: `module avail` to check, build locally if missing.
+2. The `hp.x` namelist key names have not been verified against ORNL's specific QE version; sanity-check on a small Cu2O bulk before scaling up.
+3. ESM-FCP convergence at large |U| can fail spectacularly. Start with U near 0 and walk outward.
+4. The oxide(111) slab builders return *a* termination, not the lowest-energy one. Cleave-position optimization is a manual exercise; the implementation plan calls it out.
+
 ### Resources to bookmark
 
 - Quantum ESPRESSO documentation: <https://www.quantum-espresso.org/documentation/>

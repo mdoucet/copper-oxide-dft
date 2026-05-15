@@ -16,9 +16,9 @@ from typing import Any
 
 from ase import Atoms
 
-from copper_oxide_dft.qe_input import write_pw_input
+from copper_oxide_dft.qe_input import spin_and_hubbard_overrides, write_pw_input
 
-SUPPORTED_SWEEP_PARAMETERS = frozenset({"ecutwfc", "kpts", "degauss"})
+SUPPORTED_SWEEP_PARAMETERS = frozenset({"ecutwfc", "kpts", "degauss", "hubbard_u"})
 
 
 def _format_value(param: str, value: float | int) -> str:
@@ -26,6 +26,10 @@ def _format_value(param: str, value: float | int) -> str:
         return f"{value:.0f}"
     if param == "kpts":
         return f"{int(value)}"
+    if param == "hubbard_u":
+        # U values are small floats (0-10 eV typically); two decimals are
+        # enough and keep directory names short. "1p00" reads cleanly.
+        return f"{value:.2f}".replace(".", "p")
     # param == "degauss" (validated upstream in sweep_convergence)
     return f"{value:.3f}".replace(".", "p")
 
@@ -85,6 +89,22 @@ def sweep_convergence(
         if param == "kpts":
             n = int(value)
             kwargs["kpts"] = (n, n, n)
+        elif param == "hubbard_u":
+            # Hubbard U is not a direct write_pw_input keyword; route it
+            # through spin_and_hubbard_overrides. Spin polarization is
+            # inferred from the structure's initial magnetic moments —
+            # AFM CuO will be nspin=2 automatically.
+            magnetic = any(
+                m != 0.0 for m in atoms.get_initial_magnetic_moments()
+            )
+            nspin = 2 if magnetic else 1
+            existing_extra = dict(kwargs.pop("extra_input_data", {}) or {})
+            overrides = spin_and_hubbard_overrides(
+                atoms, nspin=nspin, hubbard_u={"Cu": float(value)}
+            )
+            for namelist, entries in overrides.items():
+                existing_extra.setdefault(namelist, {}).update(entries)
+            kwargs["extra_input_data"] = existing_extra
         else:
             kwargs[param] = float(value)
         write_pw_input(
