@@ -171,6 +171,40 @@ Landed Python-only scaffolds for every remaining phase so the user can return ne
 3. ESM-FCP convergence at large |U| can fail spectacularly. Start with U near 0 and walk outward.
 4. The oxide(111) slab builders return *a* termination, not the lowest-energy one. Cleave-position optimization is a manual exercise; the implementation plan calls it out.
 
+### 2026-05-18: Real experimental system — THF / EtOH / Ag/AgCl / U = −0.8 V
+
+The lab system this project is modelling computationally:
+
+- **Solvent**: tetrahydrofuran (THF), ε_static = 7.52 at 298 K (CRC handbook).
+- **Proton donor**: 1 % ethanol (EtOH) in THF. The proton reservoir for any PCET step is EtOH ⇌ EtO⁻ + H⁺, *not* H₂O.
+- **Reference electrode**: Ag/AgCl. Treated computationally with **absolute potential 4.64 V vs vacuum** (= 4.44 V SHE + 0.197 V Ag/AgCl in sat. KCl).
+- **Target potential**: U = −0.8 V vs Ag/AgCl (≈ −0.997 V vs SHE; cathodic regime).
+- **Surface**: Cu(111) with O adsorbates as a proxy for CuO/Cu(111) until a coincident-supercell builder lands (Phase 8 task).
+
+**Implications for the workflow** (see [startup-cuo-cu-nonaqueous.md](startup-cuo-cu-nonaqueous.md) for the full walkthrough):
+
+1. **Phase 4 aqueous Pourbaix is skipped.** The CHE machinery in [che.py](../src/copper_oxide_dft/che.py) and [pourbaix.py](../src/copper_oxide_dft/pourbaix.py) hard-codes the H₂O reservoir and uses pH as an axis. Running it on non-aqueous data yields a syntactically valid, scientifically meaningless diagram. Adapting `che.py` to an EtOH proton reservoir is a future task; the immediate path is Phase 3 surface energetics → Phase 7 ESM-FCP.
+2. **ESM-FCP calls take `she_absolute_v=4.64`.** The kwarg name in [`fcp_overrides_for_potential`](../src/copper_oxide_dft/qe_input.py) is historical — it really means "absolute potential of whatever reference you're using". Worked: U = −0.8 V → μ_F = −3.84 eV vs vacuum → fcp_mu = −0.282 Ry. Lock this in every call site and never mix references mid-project.
+3. **Environ defaults must be overridden.** Pass `static_permittivity=7.52` AND `environ_type='input'` (NOT `'water'`) to `write_environ_input`. Staying on `environ_type='water'` while overriding the permittivity silently keeps Environ's built-in water parameters. THF (ε=7.52) screens ~10× less than water (ε=78.36), so implicit-solvation shifts on this system are modest — order-of-coverage stability at U = −0.8 V is unlikely to flip between vacuum and implicit-THF.
+
+**Caveats worth carrying forward**:
+
+- **Ag/AgCl in non-aqueous is a pseudo-reference.** The 4.64 V absolute is the aqueous-sat-KCl value; in THF the liquid-junction potential at the cell shifts it by O(0.1–0.3 V) with direction depending on cell construction. For quantitative U values, plan to calibrate against internal Fc/Fc⁺ (Connelly & Geiger, *Chem. Rev.* 1996 is the canonical conversion source) and re-derive `she_absolute_v` from the measured offset. For preliminary work, 4.64 V is defensible — just don't quote it as exact.
+- **EtOH proton donor only matters for explicit chemistry.** Pure ESM-FCP at fixed U doesn't care about the proton source — we set the Fermi level directly. The EtOH reservoir becomes load-bearing if/when we extend `che.py` for PCET mechanism analysis or build explicit-EtOH overlayers (Phase 6 territory).
+
+### 2026-05-18: Hardware path — DGX Spark prototype → Frontier production
+
+The compute target for this project is a two-stage pipeline rather than a single cluster:
+
+- **Prototype**: NVIDIA **DGX Spark (GB10 Grace+Blackwell)**, a single-node workstation. ARM CPU + Blackwell-class GPU + 128 GB unified memory. No SLURM. Run `pw.x` directly via `mpirun -n 1` plus OpenMP on the Grace side.
+- **Production**: **ORNL Frontier** (AMD MI250X, 8 GCDs/node). SLURM. Conventions already documented in the Frontier section above.
+
+**Key build/runtime differences from the Ubuntu-CPU and Frontier paths the rest of this doc assumes**:
+
+- DGX Spark needs a **CUDA-aware** QE build (NVHPC SDK + CUDA + cuBLAS/cuFFT), not the AMD HIP build. Configure flag: `--with-cuda-cc=120` (Blackwell — verify against `nvidia-smi --query-gpu=compute_cap`). The apt QE package is CPU-only on ARM.
+- `make-slurm` is **not used** for DGX Spark runs — no scheduler. A trivial `qe-run <dir>` shell wrapper that does `cd <dir> && mpirun -n 1 pw.x -in pw.in > pw.out` is the equivalent. Could become a `make-runner` CLI sibling to `make-slurm` later.
+- GB10 wall times **do not extrapolate to Frontier**. Blackwell single-GPU and MI250X (×8 GCDs/node) have different peak FLOPS, memory bandwidth, and MPI scaling. Benchmark a small case on Frontier before sizing production jobs.
+
 ### Resources to bookmark
 
 - Quantum ESPRESSO documentation: <https://www.quantum-espresso.org/documentation/>
