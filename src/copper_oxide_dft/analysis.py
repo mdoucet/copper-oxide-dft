@@ -12,9 +12,22 @@ Given a directory produced by :func:`copper_oxide_dft.convergence.sweep_converge
 4. Optionally renders a matplotlib convergence plot for the lab notebook.
 
 The point estimator is per-atom so the same threshold works across
-systems of different size. Energy differences are taken from the
-*largest* sweep value (treated as the asymptote) so a curve that hasn't
-plateaued yet is correctly flagged as not converged.
+systems of different size.
+
+**Asymptote direction is parameter-dependent**:
+
+* ``ecutwfc``, ``kpts``, ``hubbard_u``: larger = better. The largest
+  sweep value is the asymptote; the smallest value within threshold is
+  the converged pick.
+* ``degauss``: smaller = better (the T→0 physical limit; large smearing
+  *distorts* the Fermi surface rather than converging). The smallest
+  sweep value is the asymptote; the largest value within threshold is
+  the converged pick.
+
+The set :data:`LOW_VALUE_IS_ASYMPTOTE_PARAMS` tracks which parameters
+treat the smallest value as the asymptote. :func:`analyze_sweep` picks
+the direction automatically; callers of :func:`find_converged_value`
+can override with the ``low_value_is_asymptote`` keyword.
 """
 
 from __future__ import annotations
@@ -33,6 +46,14 @@ if TYPE_CHECKING:
 DEFAULT_CONVERGENCE_THRESHOLD_MEV_PER_ATOM = 1.0
 """Default per-atom energy-difference threshold for declaring convergence.
 Matches the Phase 1 success criterion."""
+
+LOW_VALUE_IS_ASYMPTOTE_PARAMS = frozenset({"degauss"})
+"""Sweep parameters whose *smallest* value is the converged asymptote.
+
+``degauss`` is the T→0 limit at zero smearing; values larger than the
+plateau wash out the Fermi surface and give wrong energies, not better
+ones. All other supported parameters (``ecutwfc``, ``kpts``,
+``hubbard_u``) are the conventional "larger = better" direction."""
 
 
 @dataclass(frozen=True)
@@ -60,16 +81,25 @@ class ConvergenceResult:
         param_name: The swept parameter ('ecutwfc', 'kpts', 'degauss',
             'hubbard_u').
         points: Sweep points in ascending parameter order.
-        converged_value: Smallest parameter value at which the per-atom
-            energy is within ``threshold_mev_per_atom`` of the largest
-            value's energy. ``None`` if no value converges.
+        converged_value: Parameter value at which the per-atom energy
+            is within ``threshold_mev_per_atom`` of the asymptote.
+            ``None`` if no value converges. For ``degauss`` this is the
+            *largest* value within threshold (the converged pick walks
+            up from the T→0 asymptote); for every other parameter it
+            is the *smallest* value within threshold (the converged pick
+            walks down from the high-resolution asymptote).
         threshold_mev_per_atom: The threshold used.
+        low_value_is_asymptote: If True, the smallest sweep value was
+            treated as the asymptote (degauss convention). If False,
+            the largest sweep value was treated as the asymptote
+            (ecutwfc / kpts / hubbard_u convention).
     """
 
     param_name: str
     points: tuple[SweepPoint, ...]
     converged_value: float | None
     threshold_mev_per_atom: float
+    low_value_is_asymptote: bool = False
 
 
 _SWEEP_DIR_RE = re.compile(r"^(?P<param>[a-z_]+)_(?P<value>[-+0-9p.]+)$")
@@ -156,29 +186,47 @@ def find_converged_value(
     points: Iterable[SweepPoint],
     *,
     threshold_mev_per_atom: float = DEFAULT_CONVERGENCE_THRESHOLD_MEV_PER_ATOM,
+    low_value_is_asymptote: bool = False,
 ) -> float | None:
-    """Smallest sweep value within ``threshold`` of the largest value.
+    """Cheapest sweep value within ``threshold`` of the converged asymptote.
 
-    The largest-value point is treated as the converged asymptote; any
-    smaller value whose per-atom energy lies within the threshold is
-    considered "good enough." Returns the smallest such value, or
-    ``None`` if no point qualifies.
+    The asymptote is one end of the sweep curve; the converged pick is
+    the value on the other end that first lies within the threshold of
+    the asymptote. The asymptote itself is excluded (a single point
+    can't prove its own convergence).
+
+    For ``ecutwfc`` / ``kpts`` / ``hubbard_u`` (``low_value_is_asymptote=False``):
+    the asymptote is the *largest* sweep value, and the converged pick
+    is the *smallest* value within threshold (cheapest setting that's
+    good enough).
+
+    For ``degauss`` (``low_value_is_asymptote=True``): the asymptote is
+    the *smallest* sweep value (T→0 limit), and the converged pick is
+    the *largest* value within threshold (loosest smearing that still
+    matches T→0 — useful because tighter smearing demands denser k-points).
 
     Args:
         points: Sweep points (need not be pre-sorted).
         threshold_mev_per_atom: Convergence threshold (meV/atom).
+        low_value_is_asymptote: If True, treat the smallest value as the
+            asymptote. See :data:`LOW_VALUE_IS_ASYMPTOTE_PARAMS`.
 
     Returns:
-        Smallest converged parameter value, or ``None``.
+        Converged parameter value, or ``None`` if no point qualifies.
     """
     ordered = sorted(points, key=lambda p: p.param_value)
     if len(ordered) < 2:
         return None
-    asymptote = ordered[-1].energy_per_atom_ev
     threshold_ev = threshold_mev_per_atom * 1.0e-3
-    # Exclude the asymptote itself: a single point can't prove its own
-    # convergence. The "smallest converged value" must be strictly smaller
-    # than the largest sweep value AND lie within threshold of it.
+    if low_value_is_asymptote:
+        asymptote = ordered[0].energy_per_atom_ev
+        # Walk from largest toward smallest; first hit is the largest
+        # value within threshold (loosest setting still matching T→0).
+        for point in reversed(ordered[1:]):
+            if abs(point.energy_per_atom_ev - asymptote) <= threshold_ev:
+                return point.param_value
+        return None
+    asymptote = ordered[-1].energy_per_atom_ev
     for point in ordered[:-1]:
         if abs(point.energy_per_atom_ev - asymptote) <= threshold_ev:
             return point.param_value
@@ -190,16 +238,24 @@ def analyze_sweep(
     *,
     threshold_mev_per_atom: float = DEFAULT_CONVERGENCE_THRESHOLD_MEV_PER_ATOM,
 ) -> ConvergenceResult:
-    """End-to-end: walk a sweep tree, parse outputs, pick converged value."""
+    """End-to-end: walk a sweep tree, parse outputs, pick converged value.
+
+    The asymptote direction is chosen automatically based on the swept
+    parameter (see :data:`LOW_VALUE_IS_ASYMPTOTE_PARAMS`).
+    """
     param_name, points = collect_sweep_points(root)
+    low_is_asymptote = param_name in LOW_VALUE_IS_ASYMPTOTE_PARAMS
     converged = find_converged_value(
-        points, threshold_mev_per_atom=threshold_mev_per_atom
+        points,
+        threshold_mev_per_atom=threshold_mev_per_atom,
+        low_value_is_asymptote=low_is_asymptote,
     )
     return ConvergenceResult(
         param_name=param_name,
         points=tuple(points),
         converged_value=converged,
         threshold_mev_per_atom=threshold_mev_per_atom,
+        low_value_is_asymptote=low_is_asymptote,
     )
 
 
@@ -232,7 +288,7 @@ def plot_convergence(
     ys = [p.energy_per_atom_ev for p in result.points]
     ax.plot(xs, ys, marker="o", color="C0", label="E/atom")
 
-    asymptote = ys[-1]
+    asymptote = ys[0] if result.low_value_is_asymptote else ys[-1]
     threshold_ev = result.threshold_mev_per_atom * 1.0e-3
     ax.axhline(asymptote, color="gray", linestyle="--", linewidth=0.8)
     ax.axhspan(asymptote - threshold_ev, asymptote + threshold_ev, color="gray", alpha=0.15)

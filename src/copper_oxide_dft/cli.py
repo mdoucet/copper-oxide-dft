@@ -542,7 +542,10 @@ def sweep_analyze(root: Path, threshold_mev: float, png_path: Path | None) -> No
         f"Sweep parameter: {result.param_name}  "
         f"(threshold {result.threshold_mev_per_atom} meV/atom)"
     )
-    asymptote_ev = result.points[-1].energy_per_atom_ev
+    asymptote_point = (
+        result.points[0] if result.low_value_is_asymptote else result.points[-1]
+    )
+    asymptote_ev = asymptote_point.energy_per_atom_ev
     click.echo(
         f"{'value':>12}  {'E/atom (eV)':>16}  {'ΔE (meV/atom)':>16}  done"
     )

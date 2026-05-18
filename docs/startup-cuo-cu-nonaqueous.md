@@ -246,19 +246,45 @@ echo 'export CUOXDFT_PSEUDO_DIR=~/pseudos' >> ~/.bashrc
 To avoid retyping the `mpirun` line:
 
 ```bash
+mkdir -p ~/bin
 cat > ~/bin/qe-run <<'EOF'
 #!/usr/bin/env bash
-# qe-run <directory> — run pw.x on a pw.in inside <directory>
+# qe-run <directory> — run pw.x on a pw.in inside <directory>.
+# Uses mpirun if available (and QE_NRANKS > 1); otherwise invokes pw.x
+# directly. For a single-rank run on one GPU, the direct path is
+# functionally equivalent and avoids requiring an MPI install.
 set -euo pipefail
-cd "$1"
-OMP_NUM_THREADS="${OMP_NUM_THREADS:-4}" \
-mpirun -n "${QE_NRANKS:-1}" pw.x -in pw.in > pw.out
+work_dir="${1:?usage: qe-run <dir>}"
+ranks="${QE_NRANKS:-1}"
+export OMP_NUM_THREADS="${OMP_NUM_THREADS:-4}"
+
+cd "$work_dir"
+
+if [[ "$ranks" -gt 1 ]] && command -v mpirun >/dev/null 2>&1; then
+    mpirun -n "$ranks" pw.x -in pw.in > pw.out
+elif command -v mpirun >/dev/null 2>&1; then
+    mpirun -n 1 pw.x -in pw.in > pw.out
+else
+    pw.x -in pw.in > pw.out
+fi
 EOF
 chmod +x ~/bin/qe-run
+# Make sure ~/bin is on PATH:
+case ":$PATH:" in *":$HOME/bin:"*) ;; *) export PATH="$HOME/bin:$PATH" ;; esac
 ```
 
 Then any `qe-run runs/<somewhere>` will run the calculation in that
-directory and capture `pw.out` next to `pw.in`.
+directory and capture `pw.out` next to `pw.in`. For multi-rank GPU
+runs (Frontier or a multi-GPU node — not GB10), set
+`QE_NRANKS=8 qe-run runs/...`.
+
+**Note on MPI on GB10**: the CUDA-aware QE build wires in the NVHPC SDK's
+MPI by default (configure picks it up automatically when `mpicc` is on
+PATH). If `mpirun` is still missing after the build, your NVHPC modules
+aren't loaded — re-do `export PATH=$NVHPC_ROOT/comm_libs/mpi/bin:$PATH`.
+If you genuinely don't need MPI (single rank on one GPU), the wrapper
+above falls back to direct `pw.x` invocation and the workflow still
+works.
 
 ---
 
@@ -283,7 +309,7 @@ acceleration this finishes in seconds.
 ### 2.2 Convergence sweep
 
 ```bash
-copper-oxide-dft sweep --param ecutwfc --values 40,60,80,100 --out runs/conv_ecutwfc
+copper-oxide-dft sweep --param ecutwfc --values 40,60,80,100,120,140 --out runs/conv_ecutwfc
 for d in runs/conv_ecutwfc/*/; do qe-run "$d"; done
 
 copper-oxide-dft sweep-analyze runs/conv_ecutwfc \
@@ -294,6 +320,22 @@ copper-oxide-dft sweep-analyze runs/conv_ecutwfc \
 Repeat for `kpts` (try 6, 8, 10, 12) and `degauss` (0.01, 0.02, 0.03).
 Record the converged triplet in [ground_truths.md](ground_truths.md);
 every other phase reuses these.
+
+```bash
+copper-oxide-dft sweep --param kpts --values 10,12,14,16,18,20,24 --out runs/conv_kpts
+for d in runs/conv_kpts/*/;do qe-run "$d"; done
+
+copper-oxide-dft sweep-analyze runs/conv_kpts \
+  --threshold-mev 1 \
+  --png runs/conv_kpts/convergence-kpts.png
+
+copper-oxide-dft sweep --param degauss --values 0.01,0.02,0.03,0.04,0.05,0.06,0.07 --out runs/conv_degauss
+for d in runs/conv_degauss/*/; do qe-run "$d"; done
+
+copper-oxide-dft sweep-analyze runs/conv_degauss \
+  --threshold-mev 1 \
+  --png runs/conv_degauss/convergence-degauss.png
+```
 
 ### 2.3 Lattice parameter (vc-relax)
 

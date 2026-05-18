@@ -82,6 +82,42 @@ def test_find_converged_value_single_point_returns_none() -> None:
     assert find_converged_value([_sp(40.0, -100.0)]) is None
 
 
+def test_find_converged_value_low_asymptote_picks_largest_within_threshold() -> None:
+    """degauss convention: smallest value is the T→0 asymptote; the
+    converged pick is the LARGEST value still within threshold (loosest
+    smearing that still matches T→0)."""
+    points = [
+        _sp(0.01, -100.0000),  # asymptote (T→0)
+        _sp(0.02, -100.0001),  # 0.1 meV — converged
+        _sp(0.03, -100.0005),  # 0.5 meV — converged
+        _sp(0.04, -100.010),   # 10 meV — not converged
+        _sp(0.05, -100.020),   # 20 meV — way off
+    ]
+    # Should pick 0.03 (largest value within 1 meV of 0.01).
+    assert (
+        find_converged_value(
+            points, threshold_mev_per_atom=1.0, low_value_is_asymptote=True
+        )
+        == 0.03
+    )
+
+
+def test_find_converged_value_low_asymptote_none_when_no_plateau() -> None:
+    """If every non-asymptote point exceeds the threshold, return None.
+    This is what users see when their degauss sweep has no plateau."""
+    points = [
+        _sp(0.01, -100.0),
+        _sp(0.02, -100.010),  # 10 meV off
+        _sp(0.03, -100.050),
+    ]
+    assert (
+        find_converged_value(
+            points, threshold_mev_per_atom=1.0, low_value_is_asymptote=True
+        )
+        is None
+    )
+
+
 # ---- collect_sweep_points + analyze_sweep ----------------------------------
 
 
@@ -141,6 +177,49 @@ def test_analyze_sweep_end_to_end(tmp_path: Path, pseudo_dir: Path) -> None:
     assert result.param_name == "ecutwfc"
     assert len(result.points) == 3
     assert result.converged_value == 60.0
+    # ecutwfc uses the conventional "largest = asymptote" direction.
+    assert result.low_value_is_asymptote is False
+
+
+def test_analyze_sweep_picks_low_asymptote_for_degauss(
+    tmp_path: Path, pseudo_dir: Path
+) -> None:
+    """End-to-end degauss sweep: analyzer must treat the SMALLEST value
+    as the T→0 asymptote and pick the largest value within threshold."""
+    root = tmp_path / "conv"
+    # Synthetic curve in Ry: 0.01 is T→0; 0.02, 0.03 are on the plateau;
+    # 0.05, 0.06 have smearing distortion. Energies in Ry (converted in
+    # the parser); threshold below is set in meV/atom so we use offsets
+    # well below 1 meV in eV-per-atom space.
+    _make_sweep_dir(root, "degauss", "0p010", -100.000000, pseudo_dir)
+    _make_sweep_dir(root, "degauss", "0p020", -100.0000005, pseudo_dir)
+    _make_sweep_dir(root, "degauss", "0p030", -100.0000007, pseudo_dir)
+    _make_sweep_dir(root, "degauss", "0p050", -100.010, pseudo_dir)  # distorted
+    _make_sweep_dir(root, "degauss", "0p060", -100.030, pseudo_dir)  # distorted
+
+    result = analyze_sweep(root, threshold_mev_per_atom=1.0)
+    assert result.param_name == "degauss"
+    assert result.low_value_is_asymptote is True
+    # Largest degauss value still within 1 meV/atom of the 0.01 Ry T→0
+    # asymptote is 0.03.
+    assert result.converged_value == 0.030
+
+
+def test_analyze_sweep_degauss_returns_none_when_no_plateau(
+    tmp_path: Path, pseudo_dir: Path
+) -> None:
+    """Mirrors the symptom the user hit on their real conv_degauss tree:
+    no degauss value lies within threshold of the smallest, so analyze
+    returns None rather than picking a smeared-out point."""
+    root = tmp_path / "conv"
+    # Monotonic large drift away from 0.01 Ry — no plateau.
+    _make_sweep_dir(root, "degauss", "0p010", -100.000, pseudo_dir)
+    _make_sweep_dir(root, "degauss", "0p020", -100.020, pseudo_dir)
+    _make_sweep_dir(root, "degauss", "0p030", -100.050, pseudo_dir)
+
+    result = analyze_sweep(root, threshold_mev_per_atom=1.0)
+    assert result.converged_value is None
+    assert result.low_value_is_asymptote is True
 
 
 # ---- plot_convergence ------------------------------------------------------
