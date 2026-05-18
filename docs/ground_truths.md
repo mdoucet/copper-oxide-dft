@@ -235,6 +235,47 @@ This is **inside the normal PBE range** for metallic lattice constants. PBE syst
 
 **Cross-check before scaling up**: if a Phase-3 surface energy comes out wildly off literature (>20% from γ ≈ 1.3 J/m² for Cu(111)) without an obvious geometric explanation, the *very first* thing to check is whether the slab was built with the relaxed `a` or the experimental one.
 
+### 2026-05-18: Slab relaxations need `nosym=True`
+
+Any Cu(111) (or other constrained) slab relaxation built with
+[`build_cu111_slab`](../src/copper_oxide_dft/structure_builder.py) must
+add `nosym=.true.` and `noinv=.true.` to `&SYSTEM` via
+`extra_input_data`. Without it, QE aborts during BFGS with:
+
+```
+from checkallsym : error #         1
+some of the original symmetry operations not satisfied
+```
+
+**Why:** `build_cu111_slab` applies a `FixAtoms` constraint to the
+bottom 2 layers (mimicking semi-infinite bulk). QE inspects the
+starting geometry, detects the slab's full p3m1 + inversion symmetry,
+and reduces the k-point grid accordingly. As soon as BFGS moves the
+top layers without moving the bottom, the geometry no longer satisfies
+that symmetry, the symmetry-reduced k-point sum becomes inconsistent
+with the new geometry, and `checkallsym` kills the run.
+
+**Cost:** ~6-8× more k-points actually computed (the 6×6×1 lateral
+grid no longer reduces to a handful of irreducible points). There is
+no honest cheaper alternative — the constraint genuinely breaks the
+symmetry, and any "fix" that preserves it (e.g. relaxing all layers
+or none) defeats the slab convention.
+
+**Where to apply:** `write_pw_input(..., extra_input_data={'system':
+{'nosym': True, 'noinv': True}})` for the clean slab; merge with
+`spin_and_hubbard_overrides` for O-covered slabs (merge into the
+existing `'system'` dict, don't overwrite — the helper already puts
+`nspin` and `Hubbard_U(i)` there). See §4.1 of
+[startup-cuo-cu-nonaqueous.md](startup-cuo-cu-nonaqueous.md) for the
+merge pattern.
+
+**Potential tooling improvement (not done):** `build_cu111_slab` could
+return a sentinel or set an attribute that `write_pw_input` reads and
+auto-injects `nosym=True` when `FixAtoms` is present. Deferred — the
+current explicit-override path is fine once you know, and an automatic
+behavior would surprise the next person who *wants* the symmetry kept
+for a free-floating symmetric slab without constraints.
+
 ### Resources to bookmark
 
 - Quantum ESPRESSO documentation: <https://www.quantum-espresso.org/documentation/>

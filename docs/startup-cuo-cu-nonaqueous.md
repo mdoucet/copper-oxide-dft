@@ -476,27 +476,174 @@ overnight.
 
 ### 4.1 Clean slab
 
+Three things this snippet does that the naive form does not:
+
+1. Loads the Phase 1 converged parameters and the PBE-relaxed `a` —
+   building the slab on the experimental `a = 3.615 Å` instead of the
+   PBE-relaxed `3.6577 Å` introduces ~1.2 % compressive strain that
+   biases surface energies by ~10 meV/atom.
+2. Disables automatic symmetry detection (`nosym=True`, `noinv=True`).
+   The `FixAtoms` constraint on the bottom 2 layers breaks the slab's
+   inversion symmetry; if QE detects the full symmetry from the
+   starting geometry and then BFGS relaxes only the top, the
+   `checkallsym` watchdog aborts the run with *"some of the original
+   symmetry operations not satisfied"*. Mandatory for any constrained
+   slab relaxation.
+3. Uses `kpts=(6,6,1)` — slab convention: `kz=1` because sampling
+   perpendicular to a slab wastes work. `(6,6)` keeps the same in-plane
+   density as the 18³ bulk k-grid scaled by the 3×3 lateral repeat.
+
 ```python
 python -c "
+from copper_oxide_dft.config import load_config
 from copper_oxide_dft.structure_builder import build_cu111_slab
 from copper_oxide_dft.qe_input import write_pw_input
 
-slab = build_cu111_slab(layers=4, supercell=(3, 3), vacuum_ang=20.0)
+cu = load_config('configs/converged.json').systems['bulk_cu']
+slab = build_cu111_slab(
+    layers=4, supercell=(3, 3), vacuum_ang=20.0,
+    a=cu.extras['lattice_a_ang'],
+)
 write_pw_input(
     slab,
     out_path='runs/cu111_clean/pw.in',
     pseudopotentials={'Cu': 'Cu.upf'},
     calculation='relax',
     kpts=(6, 6, 1),
-    ecutwfc=<converged>,
+    ecutwfc=cu.ecutwfc_ry,
+    degauss=cu.degauss_ry,
+    extra_input_data={'system': {'nosym': True, 'noinv': True}},
 )
 "
 copper-oxide-dft inspect runs/cu111_clean/pw.in   # 4 layers of 9 Cu
 qe-run runs/cu111_clean
 ```
 
-`kpts=(6,6,1)` is the slab convention: `kz=1` because sampling
-perpendicular to a slab wastes work.
+`nosym=True` makes the run ~6-8× more expensive at the k-point sum
+than the symmetry-reduced version, but on a constrained slab there's
+no honest alternative — the constraint genuinely breaks the symmetry.
+See [ground_truths.md](ground_truths.md) entry "Slab relaxations need
+nosym=True".
+
+### 4.1.5 Verify the clean-slab run
+
+Five checks in order from cheapest to most informative. Anything that
+fails sends you back to the input rather than forward to §4.2.
+
+**(1) Did it finish and converge?**
+
+```bash
+copper-oxide-dft parse runs/cu111_clean/pw.out
+grep -c "JOB DONE" runs/cu111_clean/pw.out             # expect: 1
+grep -E "bfgs converged|convergence NOT|incomplete" runs/cu111_clean/pw.out | tail
+```
+
+`parse` should report `done=True`, a total energy around
+−5160 × 36 ≈ −186 000 eV, and `mag=None` (clean Cu is non-magnetic — a
+finite total magnetization means something went sideways). Absence of
+`bfgs converged` near the end means the BFGS optimizer didn't reach
+the force threshold.
+
+**(2) Force and energy trajectory** — confirm the optimization actually
+descended:
+
+```bash
+grep -E "Total force|^!" runs/cu111_clean/pw.out | tail -30
+```
+
+Total force should drop monotonically toward ~10⁻³ Ry/Bohr; total
+energy should decrease and plateau. Oscillating force without settling
+means BFGS is stuck (usually too-large initial step or a constraint
+fighting the gradient).
+
+**(3) Layer spacings** — the most informative geometric check:
+
+```python
+python <<'PY'
+from copper_oxide_dft.structure_builder import summarize_layers
+from ase.io.espresso import read_espresso_out
+import numpy as np
+
+trajs = list(read_espresso_out("runs/cu111_clean/pw.out", index=slice(None)))
+final = trajs[-1]
+print(f"Atoms: {len(final)}  (expect 36 for 4-layer 3x3 slab)")
+
+layers = summarize_layers(final, tol=0.3)
+print(f"\nLayers (top down):")
+zs = [L.z for L in reversed(layers)]
+for i, L in enumerate(reversed(layers)):
+    print(f"  L{i}: z = {L.z:7.3f} A  ({L.composition_label()}, {L.total_atoms} atoms)")
+
+a_bulk = 3.6577     # PBE-relaxed
+d111_bulk = a_bulk * np.sqrt(3) / 3
+print(f"\nInterlayer spacings (A):  bulk d111 = {d111_bulk:.3f}")
+for i in range(len(zs) - 1):
+    d = zs[i] - zs[i + 1]
+    pct = (d - d111_bulk) / d111_bulk * 100
+    print(f"  d{i}-{i+1} = {d:.3f}  ({pct:+.1f}% vs bulk)")
+PY
+```
+
+**What "good" looks like**:
+
+- 36 atoms (4 layers × 9 atoms for 3×3).
+- Top-layer spacing `d_01` contracts by ~1–2 % vs bulk d₁₁₁ — the
+  canonical relaxation signature for fcc(111).
+- `d_12` essentially at bulk; `d_23` exactly at bulk (the FixAtoms
+  constraint pins layers 1–2 from the bottom).
+- No mixed layers (no Cu sitting at a non-physical z).
+
+A top-layer *expansion* is a rare PBE failure mode for Cu(111); usually
+indicates an under-relaxed top layer or too-coarse k-points.
+
+**(4) Inputs that were actually used** — useful if you didn't paste the
+§4.1 snippet exactly:
+
+```bash
+grep -E "ecutwfc|degauss|nspin|K_POINTS" runs/cu111_clean/pw.in | head
+head -5 runs/cu111_clean/pw.in   # check pseudo_dir resolves to your pseudos
+```
+
+The in-plane lattice vector length should be `3 × a/√2 ≈ 7.76 Å` for the
+PBE-relaxed `a = 3.6577 Å`. If you see `~7.67 Å`, the slab was built on
+the experimental lattice — re-build with the config-loaded `a` and
+re-run.
+
+**(5) Surface energy** — the science check:
+
+```python
+python <<'PY'
+from copper_oxide_dft.parse import parse_pw_output
+from copper_oxide_dft.structure_builder import surface_energy_ev_per_a2
+import numpy as np
+
+slab = parse_pw_output("runs/cu111_clean/pw.out").total_energy_ev
+bulk = parse_pw_output("runs/bulk_cu_vc/pw.out").total_energy_ev   # 1 atom/cell
+
+a = 3.6577
+A_prim = (a / np.sqrt(2))**2 * np.sin(np.deg2rad(60))
+A_slab = A_prim * 9     # 3x3 lateral
+
+gamma = surface_energy_ev_per_a2(slab, bulk, 36, A_slab, n_surfaces=2)
+print(f"gamma = {gamma:.4f} eV/A^2  =  {gamma * 16.0218:.3f} J/m^2")
+print(f"Literature Cu(111): ~0.08 eV/A^2 (~1.3 J/m^2)")
+PY
+```
+
+**Hit ranges**: published DFT γ for Cu(111) is **1.28–1.41 J/m²** (PBE
+undershoots vs experimental 1.79 J/m² — typical for transition metals).
+**0.06–0.10 eV/Å² (1.0–1.6 J/m²) ⇒ you're good to proceed to §4.2.**
+
+If γ falls outside that range, the prime suspects in order:
+
+1. Slab was built on the experimental `a` instead of the relaxed value
+   (see check 4 above). The strain biases γ at the ~10 meV/atom level.
+2. `n_surfaces` is wrong: use 2 for symmetric slab, 1 if dipole
+   correction is on.
+3. BFGS didn't actually converge (see check 1).
+4. The bulk reference (`runs/bulk_cu_vc/pw.out`) used different cutoffs
+   than the slab. Re-check that both runs sourced the same
+   `configs/converged.json` values.
 
 ### 4.2 O-covered slabs at 1/4, 1/2, 3/4, 1 ML
 
@@ -504,26 +651,34 @@ A small Python driver since this isn't a CLI command yet:
 
 ```python
 python -c "
+from copper_oxide_dft.config import load_config
 from copper_oxide_dft.qe_input import write_pw_input, spin_and_hubbard_overrides
 from copper_oxide_dft.structure_builder import build_cu111_slab, add_oxygen_adsorbates
 
-ECUTWFC = <converged>          # from Phase 1
+cu = load_config('configs/converged.json').systems['bulk_cu']
 U_CU = 4.0                     # or your Phase 2 result
 
 for coverage in (1/4, 1/2, 3/4, 1.0):
-    slab = build_cu111_slab(layers=4, supercell=(3, 3), vacuum_ang=20.0)
+    slab = build_cu111_slab(layers=4, supercell=(3, 3), vacuum_ang=20.0,
+                            a=cu.extras['lattice_a_ang'])
     covered = add_oxygen_adsorbates(slab, coverage_ml=coverage, site='fcc')
     label = f'{int(coverage * 100):03d}'
+
+    # Merge the spin+U override with nosym (constrained slab, see 4.1).
+    overrides = spin_and_hubbard_overrides(
+        covered, nspin=2, hubbard_u={'Cu': U_CU}
+    )
+    overrides.setdefault('system', {}).update({'nosym': True, 'noinv': True})
+
     write_pw_input(
         covered,
         out_path=f'runs/cu111_O_{label}ML/pw.in',
         pseudopotentials={'Cu': 'Cu.upf', 'O': 'O.upf'},
         calculation='relax',
         kpts=(6, 6, 1),
-        ecutwfc=ECUTWFC,
-        extra_input_data=spin_and_hubbard_overrides(
-            covered, nspin=2, hubbard_u={'Cu': U_CU}
-        ),
+        ecutwfc=cu.ecutwfc_ry,
+        degauss=cu.degauss_ry,
+        extra_input_data=overrides,
     )
 "
 
