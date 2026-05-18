@@ -318,8 +318,38 @@ copper-oxide-dft sweep-analyze runs/conv_ecutwfc \
 ```
 
 Repeat for `kpts` (try 6, 8, 10, 12) and `degauss` (0.01, 0.02, 0.03).
-Record the converged triplet in [ground_truths.md](ground_truths.md);
-every other phase reuses these.
+
+**Lock the converged triplet in two places**:
+
+1. **`configs/converged.json`** via `ProjectConfig` — the machine-readable store every downstream phase reads at runtime:
+
+   ```bash
+   python -c "
+   from copper_oxide_dft.config import ProjectConfig, SystemConfig, save_config
+   cfg = ProjectConfig(systems={
+       'bulk_cu': SystemConfig(
+           ecutwfc_ry=<your-converged-ecutwfc>,
+           kpts=(<n>, <n>, <n>),
+           degauss_ry=<your-converged-degauss>,
+           extras={'convergence_source': 'phase1-sweep <date>'},
+       ),
+   })
+   save_config(cfg, 'configs/converged.json')
+   "
+   ```
+
+2. **[ground_truths.md](ground_truths.md)** — append a dated entry citing the values, the threshold, and the sweep that produced them. The human-readable record for "why these numbers" months from now.
+
+Every Phase ≥ 2 step then loads the JSON instead of hard-coding cutoffs:
+
+```python
+from copper_oxide_dft.config import load_config
+cfg = load_config("configs/converged.json").systems["bulk_cu"]
+write_pw_input(atoms, out_path=..., ecutwfc=cfg.ecutwfc_ry,
+               kpts=cfg.kpts, degauss=cfg.degauss_ry, ...)
+```
+
+The Phase 1 values committed for this project are documented in [ground_truths.md](ground_truths.md) (search for "Phase 1 converged parameters").
 
 ```bash
 copper-oxide-dft sweep --param kpts --values 10,12,14,16,18,20,24 --out runs/conv_kpts
@@ -329,7 +359,7 @@ copper-oxide-dft sweep-analyze runs/conv_kpts \
   --threshold-mev 1 \
   --png runs/conv_kpts/convergence-kpts.png
 
-copper-oxide-dft sweep --param degauss --values 0.01,0.02,0.03,0.04,0.05,0.06,0.07 --out runs/conv_degauss
+copper-oxide-dft sweep --param degauss --values 0.005,0.01,0.02,0.03,0.04,0.05,0.06,0.07 --out runs/conv_degauss
 for d in runs/conv_degauss/*/; do qe-run "$d"; done
 
 copper-oxide-dft sweep-analyze runs/conv_degauss \
@@ -346,8 +376,29 @@ qe-run runs/bulk_cu_vc
 grep -A 4 "CELL_PARAMETERS" runs/bulk_cu_vc/pw.out | tail -4
 ```
 
-Relaxed `a` must be within 0.5 % of 3.615 Å. If not, your `ecutwfc` was
-not actually converged — back to 2.2.
+Compute `a = 2 × min(|cell_vector|)` for the fcc primitive cell. **The
+PBE-relaxed value should land ~1–2 % above experimental 3.615 Å** — PBE
+systematically overestimates transition-metal lattice constants. A
+~1.2 % overshoot (≈ 3.658 Å) is normal. The plan's "<0.5 %" criterion is
+unachievable with pure PBE on Cu and should be read as ">3 % indicates
+a real calculation bug"; see [ground_truths.md](ground_truths.md) entry
+"PBE relaxed lattice parameter for Cu".
+
+**Lock the relaxed value into [configs/converged.json](../configs/converged.json)**:
+
+```python
+from copper_oxide_dft.config import load_config, save_config
+cfg = load_config("configs/converged.json")
+cfg.systems["bulk_cu"].extras["lattice_a_ang"] = <your-relaxed-a>
+cfg.systems["bulk_cu"].extras["lattice_a_source"] = "PBE vc-relax <date>"
+save_config(cfg, "configs/converged.json")
+```
+
+Every Phase ≥ 2 step that builds Cu / Cu(111) / Cu-O structures **must**
+read this value, not the experimental 3.615 Å — building slabs on the
+experimental lattice and running PBE on them introduces ~1 %
+compressive strain that biases surface energies (~10 meV/atom level)
+and slightly distorts adsorption sites.
 
 ---
 

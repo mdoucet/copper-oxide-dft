@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "systems": {
+    "bulk_cu": {
+      "ecutwfc_ry": 100.0,
+      "kpts": [
+        18,
+        18,
+        18
+      ],
+      "degauss_ry": 0.01,
+      "lattice_a_ang": 3.6577,
+      "convergence_source": "phase1-sweep 2026-05-18",
+      "convergence_threshold_mev_per_atom": 1.0,
+      "lattice_a_source": "PBE vc-relax 2026-05-18 (experimental 3.615 \u00c5, +1.18%)"
+    }
+  }
+}

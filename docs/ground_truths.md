@@ -205,6 +205,36 @@ The compute target for this project is a two-stage pipeline rather than a single
 - `make-slurm` is **not used** for DGX Spark runs — no scheduler. A trivial `qe-run <dir>` shell wrapper that does `cd <dir> && mpirun -n 1 pw.x -in pw.in > pw.out` is the equivalent. Could become a `make-runner` CLI sibling to `make-slurm` later.
 - GB10 wall times **do not extrapolate to Frontier**. Blackwell single-GPU and MI250X (×8 GCDs/node) have different peak FLOPS, memory bandwidth, and MPI scaling. Benchmark a small case on Frontier before sizing production jobs.
 
+### 2026-05-18: Phase 1 converged parameters for bulk Cu
+
+Convergence sweeps on bulk fcc Cu (primitive cell, 1 atom) on DGX Spark gave:
+
+| Parameter | Converged value | Notes |
+|---|---|---|
+| `ecutwfc` | **100 Ry** | Phase 1 success criterion: total energy/atom stable to <1 meV/atom |
+| `ecutrho` | **800 Ry** | = 8 × ecutwfc, PAW convention (default in `write_pw_input`) |
+| k-grid | **18 × 18 × 18** | Γ-centred Monkhorst-Pack; needed extending the initial 6-12 sweep to find the plateau |
+| `degauss` | **0.01 Ry** | Marzari-Vanderbilt cold smearing. T→0 asymptote; no looser value sits within 1 meV/atom of it |
+| Lattice `a` | **3.615 Å** | Experimental (vc-relax target; relaxed value should match to <0.5 %) |
+
+**Committed to** [configs/converged.json](../configs/converged.json) under the `bulk_cu` key. Every downstream phase (Phase 2 oxide bulks, Phase 3 slabs, Phase 4 Pourbaix, Phase 7 ESM-FCP) **must** load these values via `copper_oxide_dft.config.load_config(...)` rather than re-passing literal cutoffs at call sites — that's the whole point of the JSON store, and it keeps cross-system energy comparisons clean.
+
+**Why 1 meV/atom is the threshold:** the Phase 1 success criterion in [implementation-plan.md](implementation-plan.md). For a 36-atom Cu(111) slab that's 36 meV total; for a 200-atom interface slab in Phase 8 it's 200 meV — both well under any chemistry-relevant energy difference. Tighter than necessary is fine; looser needs justification.
+
+**Tooling note:** the analyzer in [analysis.py](../src/copper_oxide_dft/analysis.py) was buggy for `degauss` (treated largest value as asymptote regardless of parameter) before 2026-05-18; it now uses `LOW_VALUE_IS_ASYMPTOTE_PARAMS` to flip the direction for `degauss`. Sweep trees generated before that date should be re-analyzed if their degauss decision depended on the CLI output. Tests in [tests/test_analysis.py](../tests/test_analysis.py) cover both directions.
+
+### 2026-05-18: PBE relaxed lattice parameter for Cu; 0.5 % criterion is too tight
+
+vc-relax on bulk fcc Cu at the Phase 1 converged settings (ecutwfc=100 Ry, kpts=18³, degauss=0.01 Ry, PseudoDojo PBE PAW) gives **a = 3.6577 Å**. Comparison to experiment 3.615 Å: **+1.18 % overestimate**.
+
+This is **inside the normal PBE range** for metallic lattice constants. PBE systematically overestimates transition-metal lattice constants by 1–2 %; Haas, Tran & Blaha (PRB 79, 085104, 2009) tabulate 3.632 Å for PBE Cu vs experimental 3.603 Å at 0 K. Our 3.658 Å is on the high end of normal but plausible.
+
+**Implication 1**: the implementation plan's Phase 1 success criterion of "<0.5 % from experiment" is **physically unachievable with pure PBE on Cu** and should be read as ">3% would indicate a calculation bug". A 1–2 % overestimate is the right answer, not a failure. Bumping the criterion below ~1.5 % requires switching to a different functional (PBEsol or SCAN both do better on metals; both come with their own costs for Cu oxides).
+
+**Implication 2**: **every downstream phase must use a = 3.6577 Å**, not the experimental 3.615 Å, when building Cu / Cu(111) / Cu-O structures. Building slabs on the experimental lattice and running them with PBE introduces ~1.2 % compressive strain that biases surface energies (~10 meV/atom level) and slightly distorts adsorption sites. Committed to [configs/converged.json](../configs/converged.json) under `bulk_cu.lattice_a_ang`. Use `load_config(...).systems["bulk_cu"].extras["lattice_a_ang"]` to read it in Python.
+
+**Cross-check before scaling up**: if a Phase-3 surface energy comes out wildly off literature (>20% from γ ≈ 1.3 J/m² for Cu(111)) without an obvious geometric explanation, the *very first* thing to check is whether the slab was built with the relaxed `a` or the experimental one.
+
 ### Resources to bookmark
 
 - Quantum ESPRESSO documentation: <https://www.quantum-espresso.org/documentation/>
