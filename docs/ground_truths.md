@@ -81,10 +81,14 @@ re-deriving:
   ("Cu" + magmom=+1, "Cu1" + magmom=-1) when per-atom magmoms are
   heterogeneous. Both sub-species need the SAME Hubbard U; the
   [`spin_and_hubbard_overrides`](../src/copper_oxide_dft/qe_input.py) helper
-  mirrors ASE's algorithm so `Hubbard_U(1)` AND `Hubbard_U(2)` both get
-  emitted. We discovered this empirically the first time tests ran; if you
-  hand-roll a QE input bypassing the helper, remember to duplicate the U
-  term for both Cu sublattices.
+  mirrors ASE's algorithm so both species get a `U Cu-3d 4.0` /
+  `U Cu1-3d 4.0` line in the QE 7.1+ HUBBARD card. We discovered this
+  empirically the first time tests ran; if you hand-roll a QE input
+  bypassing the helper, remember to duplicate the U term for both Cu
+  sublattices. (Pre-2026-05-19 versions of this project emitted the
+  deprecated ``Hubbard_U(1)`` / ``Hubbard_U(2)`` namelist keys instead;
+  QE ≥ 7.1 rejects those with ``DFT+Hubbard input syntax has changed``.
+  See the 2026-05-19 "Hubbard input syntax" entry below.)
 
 **Validation (literature ΔG_f defaults, NIST 298 K)**: with experimental
 formation free energies plugged into the CHE machinery, the resulting
@@ -263,9 +267,11 @@ or none) defeats the slab convention.
 
 **Where to apply:** `write_pw_input(..., extra_input_data={'system':
 {'nosym': True, 'noinv': True}})` for the clean slab; merge with
-`spin_and_hubbard_overrides` for O-covered slabs (merge into the
-existing `'system'` dict, don't overwrite — the helper already puts
-`nspin` and `Hubbard_U(i)` there). See §4.1 of
+`spin_and_hubbard_overrides(...).namelist_overrides` for O-covered
+slabs (merge into the existing `'system'` dict, don't overwrite —
+the helper already puts `nspin` and `starting_magnetization(i)`
+there) and pass `additional_cards=...hubbard_card` for the QE 7.1+
+HUBBARD card. See §4.1 of
 [startup-cuo-cu-nonaqueous.md](startup-cuo-cu-nonaqueous.md) for the
 merge pattern.
 
@@ -340,6 +346,64 @@ re-litigated:
   cells → Ag/AgCl pseudo-reference drift in THF. (GA-backend risk
   retired 2026-05-19 with the switch from GOCIA to `ase-ga`; see the
   2026-05-19 entry below.)
+
+### 2026-05-19: Hubbard input syntax — moved to the HUBBARD card
+
+Quantum ESPRESSO 7.1 (released Dec 2022) removed the legacy DFT+U
+syntax from the `&SYSTEM` namelist. Inputs that still set
+``lda_plus_u = .true.`` or ``Hubbard_U(i) = ...`` abort with:
+
+```
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+    task #         0
+    from  system_checkin : error #         1
+    DFT+Hubbard input syntax has changed since v7.1
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+```
+
+Hit on the DGX Spark at Phase 3.2 (bulk CuO SCF) with QE 7.3.
+
+**New syntax** (post-namelist card, manifold spelled out per species):
+
+```
+HUBBARD {atomic}
+U Cu-3d 4.000000
+U Cu1-3d 4.000000
+```
+
+**Project wiring** ([qe_input.py](../src/copper_oxide_dft/qe_input.py)):
+
+- `spin_and_hubbard_overrides(...)` now returns a
+  :class:`SpinHubbardOverrides` dataclass with two fields,
+  `namelist_overrides` (the spin pieces — `nspin`,
+  `starting_magnetization(i)`) and `hubbard_card` (the new card text,
+  empty if no U was requested).
+- `write_pw_input(...)` gained an `additional_cards: str | None`
+  parameter; pass `spin.hubbard_card` to it. Threaded through to
+  ASE's `write_espresso_in(additional_cards=...)`, which appends the
+  text verbatim after the namelist + standard cards.
+- All four production call sites updated ([cli.py](../src/copper_oxide_dft/cli.py),
+  [convergence.py](../src/copper_oxide_dft/convergence.py),
+  [ml/fcp_rerank.py](../src/copper_oxide_dft/ml/fcp_rerank.py),
+  [ml/qe_driver.py](../src/copper_oxide_dft/ml/qe_driver.py)).
+
+**Default projector type**: ``atomic`` (matches the pre-7.1
+``lda_plus_u_kind = 0`` semantics so literature U values stay
+comparable). QE's current recommendation for new work is
+``ortho-atomic`` — overrideable via the ``projector_type=`` kwarg on
+``spin_and_hubbard_overrides``, but switching mid-project would
+shift the effective U by typically 0.5–1.0 eV and re-derive the
+Phase-2 hp.x calibration. Don't flip the default casually.
+
+**Default manifolds**: ``DEFAULT_HUBBARD_MANIFOLDS`` covers
+``{Cu, Fe, Co, Ni, Mn} → 3d`` and ``O → 2p``. New species raise
+``KeyError`` rather than silently dropping the U term (the
+old-syntax pre-7.1 helper would have done the latter).
+
+**Operational note**: any ``pw.in`` file generated before this date
+carries the old syntax and will abort on QE ≥ 7.1. Regenerate via
+the relevant CLI (e.g. `copper-oxide-dft make-pourbaix-inputs`) or
+re-run the Python writer that produced it.
 
 ### 2026-05-19: GA backend — GOCIA dropped, ase-ga adopted
 

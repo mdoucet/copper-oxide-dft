@@ -176,16 +176,27 @@ def test_supported_calculations_includes_expected_modes() -> None:
 # ---- spin_and_hubbard_overrides -------------------------------------------
 
 
-def test_spin_and_hubbard_overrides_assigns_indices_in_ase_order() -> None:
-    """Cu2O has Cu before O in our builder; Hubbard_U(1) should land on Cu."""
+def test_spin_and_hubbard_overrides_emits_hubbard_card_for_cu2o() -> None:
+    """Cu2O: Cu species labelled 'Cu' in the new HUBBARD card."""
     cu2o = build_bulk_cu2o()
     overrides = spin_and_hubbard_overrides(
-        cu2o, nspin=1, hubbard_u={"Cu": 4.0, "O": 0.0}
+        cu2o, nspin=1, hubbard_u={"Cu": 4.0}
     )
-    system = overrides["system"]
+    # No Hubbard_U(i) in &SYSTEM — QE 7.1+ rejects that syntax.
+    system = overrides.namelist_overrides["system"]
     assert system["nspin"] == 1
-    assert system["Hubbard_U(1)"] == 4.0  # Cu is species 1
-    assert system["Hubbard_U(2)"] == 0.0  # O is species 2
+    assert not any(k.startswith("Hubbard_U(") for k in system)
+    # The card carries the U on Cu-3d.
+    assert "HUBBARD {atomic}" in overrides.hubbard_card
+    assert "U Cu-3d 4.000000" in overrides.hubbard_card
+
+
+def test_spin_and_hubbard_overrides_no_card_when_no_hubbard_u() -> None:
+    """Plain spin run (no Hubbard U) → empty card, namelist still set."""
+    cuo = build_bulk_cuo()
+    overrides = spin_and_hubbard_overrides(cuo, nspin=2)
+    assert overrides.namelist_overrides["system"]["nspin"] == 2
+    assert overrides.hubbard_card == ""
 
 
 def test_spin_and_hubbard_overrides_silently_skips_absent_species() -> None:
@@ -194,10 +205,9 @@ def test_spin_and_hubbard_overrides_silently_skips_absent_species() -> None:
     overrides = spin_and_hubbard_overrides(
         cu, nspin=1, hubbard_u={"Cu": 4.0, "O": 99.0}
     )
-    keys = set(overrides["system"].keys())
-    assert "Hubbard_U(1)" in keys
-    # No Hubbard_U(2) — the structure has only one species.
-    assert not any(k.startswith("Hubbard_U(2)") for k in keys)
+    # Only Cu shows up in the card (O is absent from the structure).
+    assert "U Cu-3d 4.000000" in overrides.hubbard_card
+    assert "O-2p" not in overrides.hubbard_card
 
 
 def test_spin_and_hubbard_overrides_rejects_invalid_nspin() -> None:
@@ -212,7 +222,7 @@ def test_spin_and_hubbard_overrides_starting_magnetization_as_mapping() -> None:
     overrides = spin_and_hubbard_overrides(
         cuo, nspin=2, starting_magnetization={"Cu": 1.0, "O": 0.0}
     )
-    system = overrides["system"]
+    system = overrides.namelist_overrides["system"]
     # CuO has 3 species under AFM splitting: (Cu,+1), (Cu,-1), (O,0).
     assert system["starting_magnetization(1)"] == 1.0  # Cu+
     assert system["starting_magnetization(2)"] == 1.0  # Cu- (still chemically Cu)
@@ -225,7 +235,7 @@ def test_spin_and_hubbard_overrides_starting_magnetization_as_sequence() -> None
     overrides = spin_and_hubbard_overrides(
         cuo, nspin=2, starting_magnetization=[0.7, -0.7, 0.0]
     )
-    system = overrides["system"]
+    system = overrides.namelist_overrides["system"]
     assert system["starting_magnetization(1)"] == 0.7
     assert system["starting_magnetization(2)"] == -0.7
     assert system["starting_magnetization(3)"] == 0.0
@@ -234,28 +244,32 @@ def test_spin_and_hubbard_overrides_starting_magnetization_as_sequence() -> None
 def test_spin_and_hubbard_overrides_compose_with_write_pw_input(
     tmp_path: Path, pseudo_dir: Path
 ) -> None:
-    """End-to-end: helper output works as extra_input_data for write_pw_input.
+    """End-to-end: namelist + HUBBARD card both land in the file.
 
     ASE writes namelist keys in lowercase regardless of input case, so the
-    test is case-insensitive.
+    test is case-insensitive for those; the HUBBARD card preserves case.
     """
     (pseudo_dir / "O.upf").write_text("")
     cu2o = build_bulk_cu2o()
     out_path = tmp_path / "cu2o.in"
+    spin = spin_and_hubbard_overrides(cu2o, nspin=1, hubbard_u={"Cu": 4.0})
     write_pw_input(
         cu2o,
         out_path=out_path,
         pseudopotentials={"Cu": "Cu.upf", "O": "O.upf"},
         pseudo_dir=pseudo_dir,
         calculation="vc-relax",
-        extra_input_data=spin_and_hubbard_overrides(
-            cu2o, nspin=1, hubbard_u={"Cu": 4.0}
-        ),
+        extra_input_data=spin.namelist_overrides,
+        additional_cards=spin.hubbard_card,
     )
-    text = out_path.read_text().lower()
-    assert "nspin" in text
-    assert "hubbard_u(1)" in text
-    assert "4.0" in text
+    text = out_path.read_text()
+    # Namelist piece (case-insensitive).
+    assert "nspin" in text.lower()
+    # Card piece (case-preserving).
+    assert "HUBBARD {atomic}" in text
+    assert "U Cu-3d 4.000000" in text
+    # And the deprecated form must NOT appear — that's exactly what QE 7.1+ rejects.
+    assert "hubbard_u(1)" not in text.lower()
 
 
 def test_spin_and_hubbard_overrides_afm_cuo_splits_cu_into_two_species(
@@ -265,13 +279,11 @@ def test_spin_and_hubbard_overrides_afm_cuo_splits_cu_into_two_species(
     (pseudo_dir / "O.upf").write_text("")
     cuo = build_bulk_cuo()
     overrides = spin_and_hubbard_overrides(cuo, nspin=2, hubbard_u={"Cu": 4.0})
-    system = overrides["system"]
-    assert system["Hubbard_U(1)"] == 4.0  # Cu (+1 sublattice)
-    assert system["Hubbard_U(2)"] == 4.0  # Cu (-1 sublattice) - same chem species
-    # O is species 3, gets no U term.
-    assert "Hubbard_U(3)" not in system
+    # Both Cu sublattices appear in the card under their ASE labels (Cu, Cu1).
+    assert "U Cu-3d 4.000000" in overrides.hubbard_card
+    assert "U Cu1-3d 4.000000" in overrides.hubbard_card
 
-    # And the QE input file reflects the doubled entry.
+    # The QE input file also reflects the doubled entry.
     out_path = tmp_path / "cuo.in"
     write_pw_input(
         cuo,
@@ -279,11 +291,31 @@ def test_spin_and_hubbard_overrides_afm_cuo_splits_cu_into_two_species(
         pseudopotentials={"Cu": "Cu.upf", "O": "O.upf"},
         pseudo_dir=pseudo_dir,
         calculation="vc-relax",
-        extra_input_data=overrides,
+        extra_input_data=overrides.namelist_overrides,
+        additional_cards=overrides.hubbard_card,
     )
-    text = out_path.read_text().lower()
-    assert "hubbard_u(1)" in text
-    assert "hubbard_u(2)" in text
+    text = out_path.read_text()
+    assert "U Cu-3d 4.000000" in text
+    assert "U Cu1-3d 4.000000" in text
+
+
+def test_spin_and_hubbard_overrides_unknown_manifold_raises() -> None:
+    """An unregistered species in hubbard_u must raise (not silently drop U)."""
+    from ase import Atoms
+
+    # Krypton has no entry in DEFAULT_HUBBARD_MANIFOLDS — synthetic example.
+    kr = Atoms("Kr", positions=[(0, 0, 0)], cell=[5, 5, 5], pbc=True)
+    with pytest.raises(KeyError, match="Hubbard manifold"):
+        spin_and_hubbard_overrides(kr, nspin=1, hubbard_u={"Kr": 4.0})
+
+
+def test_spin_and_hubbard_overrides_projector_type_propagates() -> None:
+    """Non-default projector (e.g. ortho-atomic) flows into the card header."""
+    cu2o = build_bulk_cu2o()
+    overrides = spin_and_hubbard_overrides(
+        cu2o, nspin=1, hubbard_u={"Cu": 4.0}, projector_type="ortho-atomic"
+    )
+    assert "HUBBARD {ortho-atomic}" in overrides.hubbard_card
 
 
 # ---- write_hp_input --------------------------------------------------------
@@ -361,11 +393,8 @@ def test_fcp_overrides_composes_with_spin_hubbard(
     cuo = build_bulk_cuo()
     fcp = fcp_overrides_for_potential(-0.4)
     spin_u = spin_and_hubbard_overrides(cuo, nspin=2, hubbard_u={"Cu": 4.0})
-    # Merge by namelist (caller side; the helpers don't auto-merge).
-    merged: dict = {}
-    for src in (fcp, spin_u):
-        for nm, entries in src.items():
-            merged.setdefault(nm, {}).update(entries)
+    # FCP is a namelist-only override; the Hubbard piece is a separate card.
+    merged = merge_namelist_overrides(fcp, spin_u.namelist_overrides)
     out_path = tmp_path / "cuo_fcp.in"
     write_pw_input(
         cuo,
@@ -373,13 +402,16 @@ def test_fcp_overrides_composes_with_spin_hubbard(
         pseudopotentials={"Cu": "Cu.upf", "O": "O.upf"},
         pseudo_dir=pseudo_dir,
         extra_input_data=merged,
+        additional_cards=spin_u.hubbard_card,
     )
-    text = out_path.read_text().lower()
-    assert "lfcp" in text
-    assert "assume_isolated" in text
-    assert "esm" in text
-    assert "nspin" in text
-    assert "hubbard_u(1)" in text
+    text = out_path.read_text()
+    text_lower = text.lower()
+    assert "lfcp" in text_lower
+    assert "assume_isolated" in text_lower
+    assert "esm" in text_lower
+    assert "nspin" in text_lower
+    assert "U Cu-3d 4.000000" in text
+    assert "U Cu1-3d 4.000000" in text
 
 
 # ---- merge_namelist_overrides + DEFAULT_PSEUDOPOTENTIALS ------------------

@@ -439,6 +439,9 @@ def make_pourbaix_inputs(
 
     # --- bulk Cu2O: vc-relax, non-magnetic, DFT+U on Cu 3d ---
     cu2o = build_bulk_cu2o()
+    cu2o_ov = spin_and_hubbard_overrides(
+        cu2o, nspin=1, hubbard_u={"Cu": hubbard_u}
+    )
     write_pw_input(
         cu2o,
         out_path=root / "bulk_cu2o" / "pw.in",
@@ -449,9 +452,8 @@ def make_pourbaix_inputs(
         ecutwfc=ecutwfc,
         kpts=(6, 6, 6),
         degauss=DEFAULT_DEGAUSS_RY,
-        extra_input_data=spin_and_hubbard_overrides(
-            cu2o, nspin=1, hubbard_u={"Cu": hubbard_u}
-        ),
+        extra_input_data=cu2o_ov.namelist_overrides,
+        additional_cards=cu2o_ov.hubbard_card,
     )
 
     # --- bulk CuO: vc-relax, AFM (nspin=2 with per-atom moments), DFT+U ---
@@ -459,6 +461,9 @@ def make_pourbaix_inputs(
     # Per-atom magnetizations are already on `cuo` from the builder; ASE
     # writes them as per-atom starting_magnetization cards. We still need
     # nspin=2 and the Hubbard U via the override helper.
+    cuo_ov = spin_and_hubbard_overrides(
+        cuo, nspin=2, hubbard_u={"Cu": hubbard_u}
+    )
     write_pw_input(
         cuo,
         out_path=root / "bulk_cuo" / "pw.in",
@@ -469,9 +474,8 @@ def make_pourbaix_inputs(
         ecutwfc=ecutwfc,
         kpts=(4, 6, 4),
         degauss=DEFAULT_DEGAUSS_RY,
-        extra_input_data=spin_and_hubbard_overrides(
-            cuo, nspin=2, hubbard_u={"Cu": hubbard_u}
-        ),
+        extra_input_data=cuo_ov.namelist_overrides,
+        additional_cards=cuo_ov.hubbard_card,
     )
 
     # --- reference H2 molecule: gamma point, non-magnetic ---

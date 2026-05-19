@@ -174,7 +174,9 @@ def write_dataset_inputs(
         sample_dir = out_root / sample_id
         sample_dir.mkdir(parents=True, exist_ok=True)
 
-        extra_input_data = _build_extra_input_data(atoms, hubbard_u_ev)
+        extra_input_data, additional_cards = _build_qe_input_pieces(
+            atoms, hubbard_u_ev
+        )
 
         write_pw_input(
             atoms,
@@ -187,6 +189,7 @@ def write_dataset_inputs(
             degauss=system_config.degauss_ry,
             pseudo_dir=pseudo_dir,
             extra_input_data=extra_input_data,
+            additional_cards=additional_cards,
         )
 
         entry = DatasetEntry(
@@ -282,12 +285,16 @@ def read_dataset_outputs(
     return results
 
 
-def _build_extra_input_data(atoms: Atoms, hubbard_u_ev: float) -> dict[str, dict[str, Any]]:
-    """Assemble the per-sample namelist overrides.
+def _build_qe_input_pieces(
+    atoms: Atoms, hubbard_u_ev: float
+) -> tuple[dict[str, dict[str, Any]], str]:
+    """Assemble the per-sample namelist overrides + HUBBARD card.
 
     Combines: symmetry off, tight tolerances, aggressive mixing, spin +
     Hubbard U when O is present. Mirrors the manuscript's bulk-sampling
-    recipe and the project's slab-relaxation convention.
+    recipe and the project's slab-relaxation convention. Returns the
+    pieces separately because QE 7.1+ moved Hubbard U out of the
+    ``&SYSTEM`` namelist into a dedicated ``HUBBARD`` card.
     """
     base = {
         "control": {"forc_conv_thr": DEFAULT_FORCE_CONVERGENCE_RY_PER_BOHR},
@@ -298,16 +305,18 @@ def _build_extra_input_data(atoms: Atoms, hubbard_u_ev: float) -> dict[str, dict
             "electron_maxstep": DEFAULT_ELECTRON_MAXSTEP,
         },
     }
+    hubbard_card = ""
 
-    spin_dict: dict[str, dict[str, Any]] | None = None
     if any(s == "O" for s in atoms.get_chemical_symbols()):
         from copper_oxide_dft.qe_input import spin_and_hubbard_overrides
 
-        spin_dict = spin_and_hubbard_overrides(
+        spin = spin_and_hubbard_overrides(
             atoms, nspin=2, hubbard_u={"Cu": hubbard_u_ev}
         )
+        base = merge_namelist_overrides(base, spin.namelist_overrides)
+        hubbard_card = spin.hubbard_card
 
-    return merge_namelist_overrides(base, spin_dict)
+    return base, hubbard_card
 
 
 def _zip_or_default(values, structures, *, default):

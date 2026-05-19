@@ -93,7 +93,9 @@ def sweep_convergence(
             # Hubbard U is not a direct write_pw_input keyword; route it
             # through spin_and_hubbard_overrides. Spin polarization is
             # inferred from the structure's initial magnetic moments —
-            # AFM CuO will be nspin=2 automatically.
+            # AFM CuO will be nspin=2 automatically. QE 7.1+ requires the
+            # HUBBARD card (additional_cards=) instead of the deprecated
+            # Hubbard_U(i) namelist keys.
             magnetic = any(
                 m != 0.0 for m in atoms.get_initial_magnetic_moments()
             )
@@ -102,9 +104,10 @@ def sweep_convergence(
             overrides = spin_and_hubbard_overrides(
                 atoms, nspin=nspin, hubbard_u={"Cu": float(value)}
             )
-            for namelist, entries in overrides.items():
+            for namelist, entries in overrides.namelist_overrides.items():
                 existing_extra.setdefault(namelist, {}).update(entries)
             kwargs["extra_input_data"] = existing_extra
+            kwargs["additional_cards"] = overrides.hubbard_card
         else:
             kwargs[param] = float(value)
         write_pw_input(

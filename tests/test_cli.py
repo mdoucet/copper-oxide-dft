@@ -305,15 +305,18 @@ def test_cli_make_pourbaix_inputs_cuo_input_has_spin_and_hubbard(tmp_path: Path)
         ],
     )
     assert result.exit_code == 0, result.output
-    # ASE writes namelist keys lowercase.
-    cuo_text = (root / "bulk_cuo" / "pw.in").read_text().lower()
-    assert "nspin" in cuo_text
-    # AFM splitting → both Cu sub-species must carry the U term.
-    assert "hubbard_u(1)" in cuo_text
-    assert "hubbard_u(2)" in cuo_text
-    assert "4.5" in cuo_text
+    cuo_text = (root / "bulk_cuo" / "pw.in").read_text()
+    cuo_lower = cuo_text.lower()
+    assert "nspin" in cuo_lower
+    # AFM splitting → both Cu sub-species (Cu, Cu1) must carry the U term
+    # in the QE 7.1+ HUBBARD card (the old Hubbard_U(i) namelist syntax is
+    # gone — emitting it would make QE 7.1+ abort with "DFT+Hubbard
+    # input syntax has changed since v7.1").
+    assert "U Cu-3d 4.500000" in cuo_text
+    assert "U Cu1-3d 4.500000" in cuo_text
+    assert "hubbard_u(1)" not in cuo_lower
     # Per-atom starting magnetizations come through ASE for the AFM ordering.
-    assert "starting_magnetization" in cuo_text
+    assert "starting_magnetization" in cuo_lower
 
 
 def test_cli_sweep_analyze_picks_converged_value(tmp_path: Path) -> None:
@@ -475,6 +478,9 @@ def test_cli_make_pourbaix_inputs_cu2o_is_nonmagnetic_with_u(tmp_path: Path) -> 
         main,
         ["make-pourbaix-inputs", str(root), "--pseudo-dir", str(pseudo_dir)],
     )
-    cu2o_text = (root / "bulk_cu2o" / "pw.in").read_text().lower()
-    assert "nspin" in cu2o_text  # explicitly nspin=1 in our overrides
-    assert "hubbard_u(1)" in cu2o_text  # Cu species 1 gets U
+    cu2o_text = (root / "bulk_cu2o" / "pw.in").read_text()
+    assert "nspin" in cu2o_text.lower()  # explicitly nspin=1 in our overrides
+    # Cu species in the QE 7.1+ HUBBARD card.
+    assert "U Cu-3d" in cu2o_text
+    # The old &SYSTEM-namelist syntax must NOT appear.
+    assert "hubbard_u(1)" not in cu2o_text.lower()

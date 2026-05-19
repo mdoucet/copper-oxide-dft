@@ -137,7 +137,7 @@ def test_supported_sweep_parameters_set() -> None:
 def test_sweep_hubbard_u_writes_one_input_per_value(
     tmp_path: Path, pseudo_dir: Path
 ) -> None:
-    """U sweep on Cu2O: each input must carry Hubbard_U(1) with the swept value."""
+    """U sweep on Cu2O: each input must carry the right U in the HUBBARD card."""
     (pseudo_dir / "O.upf").write_text("")
     atoms = build_bulk_cu2o()
     paths = sweep_convergence(
@@ -154,8 +154,10 @@ def test_sweep_hubbard_u_writes_one_input_per_value(
         "hubbard_u_4p00",
         "hubbard_u_6p00",
     }
-    text = (tmp_path / "u_sweep" / "hubbard_u_4p00" / "pw.in").read_text().lower()
-    # Cu is species 1 in Cu2O; non-magnetic so nspin defaults to 1.
-    assert "hubbard_u(1)" in text
-    assert "4.0" in text
-    assert "nspin" in text
+    text = (tmp_path / "u_sweep" / "hubbard_u_4p00" / "pw.in").read_text()
+    # Cu is the one species in Cu2O; non-magnetic so nspin defaults to 1.
+    assert "nspin" in text.lower()
+    # New-syntax HUBBARD card carries the swept value on Cu-3d.
+    assert "U Cu-3d 4.000000" in text
+    # Old &SYSTEM-namelist syntax (QE ≤ 7.0) must not leak through.
+    assert "hubbard_u(1)" not in text.lower()

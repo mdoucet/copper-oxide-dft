@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -33,6 +34,27 @@ see docs/ground_truths.md (Cu oxide DFT gotchas)."""
 DEFAULT_HUBBARD_U_CU_3D_EV = 4.0
 """Default Hubbard U on Cu 3d (eV). Literature pick (Mosey/Carter ~4 eV) for the
 Phase 4 Pourbaix work; calibrate via hp.x linear response in Phase 2."""
+
+DEFAULT_HUBBARD_PROJECTOR_TYPE = "atomic"
+"""QE 7.1+ HUBBARD-card projector type. ``atomic`` reproduces the
+``lda_plus_u_kind=0`` default that older literature U values
+(Mosey/Carter 4 eV on Cu 3d) were derived against. Switching to
+``ortho-atomic`` (QE's current recommendation for new calculations)
+shifts the effective U by typically 0.5–1.0 eV — do not flip the
+default without re-doing the hp.x calibration."""
+
+DEFAULT_HUBBARD_MANIFOLDS: Mapping[str, str] = {
+    "Cu": "3d",
+    "Fe": "3d",
+    "Co": "3d",
+    "Ni": "3d",
+    "Mn": "3d",
+    "O": "2p",
+}
+"""Default ``{symbol: manifold}`` for the QE 7.1+ HUBBARD card. The
+``HUBBARD`` card requires an explicit manifold (e.g. ``Cu-3d``) per
+species; this map keeps callers from having to spell it out for the
+common transition metals and O. Add new species here when needed."""
 
 SUPPORTED_CALCULATIONS = frozenset({"scf", "nscf", "relax", "vc-relax", "md"})
 
@@ -54,17 +76,19 @@ def merge_namelist_overrides(
     The :func:`write_pw_input` ``extra_input_data`` parameter takes a
     ``{namelist: {key: value}}`` mapping. Two helpers in this module
     (:func:`fcp_overrides_for_potential`, :func:`spin_and_hubbard_overrides`)
-    each return such a mapping, and downstream callers (ML dataset
-    generation, ESM-FCP rerank) routinely need to combine them. This
-    helper does the per-namelist ``update(...)`` so callers don't
-    re-implement it (and don't forget the ``setdefault`` step that
-    keeps previously-set keys in a namelist alive when a later source
-    only touches a subset).
+    each return such a mapping (the latter via the
+    ``.namelist_overrides`` attribute of :class:`SpinHubbardOverrides`),
+    and downstream callers (ML dataset generation, ESM-FCP rerank)
+    routinely need to combine them. This helper does the per-namelist
+    ``update(...)`` so callers don't re-implement it.
 
     Args:
         *sources: Zero or more ``{namelist: {key: value}}`` mappings.
             ``None`` is silently treated as the empty mapping so
-            callers can splat in optional dicts.
+            callers can splat in optional dicts. Note that the Hubbard
+            U card is **not** in any namelist (QE 7.1+ moved it out);
+            pass :attr:`SpinHubbardOverrides.hubbard_card` to
+            :func:`write_pw_input` via ``additional_cards=`` instead.
 
     Returns:
         A new ``dict[str, dict[str, Any]]`` containing the merged
@@ -73,8 +97,12 @@ def merge_namelist_overrides(
     Example:
         >>> fcp = fcp_overrides_for_potential(-0.8, she_absolute_v=4.64)
         >>> spin = spin_and_hubbard_overrides(atoms, nspin=2, hubbard_u={"Cu": 4.0})
-        >>> merged = merge_namelist_overrides(fcp, spin)
-        >>> write_pw_input(atoms, ..., extra_input_data=merged)
+        >>> merged = merge_namelist_overrides(fcp, spin.namelist_overrides)
+        >>> write_pw_input(
+        ...     atoms, ...,
+        ...     extra_input_data=merged,
+        ...     additional_cards=spin.hubbard_card,
+        ... )
     """
     merged: dict[str, dict[str, Any]] = {}
     for source in sources:
@@ -114,6 +142,7 @@ def write_pw_input(
     degauss: float = DEFAULT_DEGAUSS_RY,
     pseudo_dir: str | os.PathLike[str] | None = None,
     extra_input_data: Mapping[str, Mapping[str, Any]] | None = None,
+    additional_cards: str | None = None,
 ) -> Path:
     """Write a ``pw.x`` input file with project-standard defaults.
 
@@ -138,6 +167,11 @@ def write_pw_input(
             ``$CUOXDFT_PSEUDO_DIR`` if ``None``.
         extra_input_data: Optional namelist overrides merged on top of
             defaults (e.g. ``{"system": {"nspin": 2}}``).
+        additional_cards: Free-form text appended after QE's namelist /
+            card sections. Use for the QE 7.1+ ``HUBBARD`` card —
+            :func:`spin_and_hubbard_overrides` returns one in its
+            ``hubbard_card`` attribute. Pass ``None`` (default) for a
+            run without Hubbard U.
 
     Returns:
         Path to the written input file.
@@ -192,6 +226,8 @@ def write_pw_input(
 
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
+    # Empty strings would be appended verbatim by ASE; normalise to None.
+    cards = additional_cards if additional_cards else None
     with out_path.open("w") as fh:
         write_espresso_in(
             fh,
@@ -200,8 +236,81 @@ def write_pw_input(
             pseudopotentials=dict(pseudopotentials),
             kpts=kpts,
             koffset=koffset,
+            additional_cards=cards,
         )
     return out_path
+
+
+@dataclass(frozen=True)
+class SpinHubbardOverrides:
+    """Spin polarization + Hubbard U settings, ready for :func:`write_pw_input`.
+
+    Two-piece return because the QE 7.1+ HUBBARD card is no longer a
+    namelist key — it's a separate post-namelist card. Pass
+    ``namelist_overrides`` to ``write_pw_input(..., extra_input_data=...)``
+    and ``hubbard_card`` to ``write_pw_input(..., additional_cards=...)``.
+
+    Attributes:
+        namelist_overrides: ``{"system": {"nspin": ..., "starting_magnetization(i)": ...}}``.
+            Does NOT contain ``Hubbard_U(i)`` keys (QE 7.1 removed those —
+            the writer would raise ``DFT+Hubbard input syntax has changed``).
+        hubbard_card: New-syntax HUBBARD card text, ready to drop in
+            as-is. Empty string when no Hubbard U was requested.
+    """
+
+    namelist_overrides: dict[str, dict[str, Any]] = field(default_factory=dict)
+    hubbard_card: str = ""
+
+
+def _ase_species_labels(species_pairs: Sequence[tuple[float, str]]) -> list[str]:
+    """ASE QE-writer species labels: ``Symbol``, ``Symbol1``, ``Symbol2``…
+
+    ASE labels the first occurrence of a chemical symbol with the bare
+    symbol; subsequent occurrences (driven by magmom splitting) get a
+    numeric suffix. The HUBBARD card references species by these
+    labels — getting them wrong silently puts U on the wrong sublattice.
+    """
+    counts: dict[str, int] = {}
+    labels: list[str] = []
+    for _, symbol in species_pairs:
+        n = counts.get(symbol, 0)
+        labels.append(symbol if n == 0 else f"{symbol}{n}")
+        counts[symbol] = n + 1
+    return labels
+
+
+def _build_hubbard_card(
+    species_pairs: Sequence[tuple[float, str]],
+    species_labels: Sequence[str],
+    hubbard_u: Mapping[str, float],
+    manifolds: Mapping[str, str],
+    projector_type: str,
+) -> str:
+    """Emit the QE 7.1+ ``HUBBARD {projector}\\nU label-manifold value`` block.
+
+    Returns an empty string if no species in ``species_pairs`` has a U
+    value configured — saves the caller from having to special-case
+    "no Hubbard" runs.
+    """
+    relevant: list[tuple[str, str, float]] = []
+    for (_, symbol), label in zip(species_pairs, species_labels, strict=True):
+        if symbol not in hubbard_u:
+            continue
+        if symbol not in manifolds:
+            raise KeyError(
+                f"No Hubbard manifold registered for symbol {symbol!r}; "
+                f"add it to `manifolds=` or to DEFAULT_HUBBARD_MANIFOLDS."
+            )
+        relevant.append((label, manifolds[symbol], float(hubbard_u[symbol])))
+
+    if not relevant:
+        return ""
+
+    lines = [f"HUBBARD {{{projector_type}}}"]
+    for label, manifold, u_value in relevant:
+        # QE accepts plain decimal; six digits is enough for any U we'd quote.
+        lines.append(f"U {label}-{manifold} {u_value:.6f}")
+    return "\n".join(lines) + "\n"
 
 
 def spin_and_hubbard_overrides(
@@ -210,74 +319,80 @@ def spin_and_hubbard_overrides(
     nspin: int = 2,
     hubbard_u: Mapping[str, float] | None = None,
     starting_magnetization: Mapping[str, float] | Sequence[float] | None = None,
-) -> dict[str, dict[str, Any]]:
-    """Build the ``extra_input_data`` override for spin-polarized / DFT+U runs.
+    projector_type: str = DEFAULT_HUBBARD_PROJECTOR_TYPE,
+    manifolds: Mapping[str, str] | None = None,
+) -> SpinHubbardOverrides:
+    """Build the spin + Hubbard-U pieces for a QE 7.1+ pw.x input.
 
-    Quantum ESPRESSO needs three things to do a magnetic DFT+U calculation
-    correctly, and they go into three different namelists. This helper
-    assembles them so callers don't have to remember the syntax:
+    QE 7.1 split Hubbard U out of the ``&SYSTEM`` namelist into a
+    dedicated ``HUBBARD`` card; older inputs hit
+    ``DFT+Hubbard input syntax has changed since v7.1`` and abort.
+    This helper returns both pieces in one shot:
 
-    * ``SYSTEM.nspin = 2`` — turn on spin polarization (mandatory for CuO,
-      O2, and any O-containing slab).
-    * ``SYSTEM.starting_magnetization(i)`` — initial moment per species
-      index. The right starting guess matters: zero moments often produce
-      a non-magnetic (wrong) ground state for CuO.
-    * ``SYSTEM.Hubbard_U(i)`` — the U value per species. PBE alone gives a
-      qualitatively wrong band gap and lattice for Cu oxides; DFT+U fixes
-      both. The project default is ~4 eV on Cu 3d (see ground_truths.md).
+    * The ``&SYSTEM`` namelist gets ``nspin`` and any
+      ``starting_magnetization(i)`` entries (unchanged from pre-7.1).
+    * The HUBBARD card text — emitted only when ``hubbard_u`` is given —
+      lists one ``U <label>-<manifold> <value>`` line per species,
+      including the AFM-split duplicates (e.g. CuO's ``Cu`` + ``Cu1``).
 
-    Species index assignment mirrors ASE's QE writer. With nspin=2 (or any
-    nonzero initial magmom on ``atoms``), ASE splits atoms of the same
-    chemical symbol into separate species when their initial magnetic
-    moments differ — e.g. CuO's AFM ordering produces species "Cu" (mag
-    +1) and "Cu1" (mag -1), both still Cu chemically, both needing the
-    same Hubbard U. This helper emits ``Hubbard_U(i)`` for every species
-    whose chemical symbol appears in ``hubbard_u``, including the
-    AFM-split duplicates.
+    Species index / label assignment mirrors ASE's QE writer. With
+    ``nspin=2`` (or any nonzero initial magmom on ``atoms``), ASE
+    splits atoms of the same chemical symbol into separate species
+    when their initial magnetic moments differ — e.g. CuO's AFM
+    ordering produces species ``Cu`` (mag +1) and ``Cu1`` (mag -1),
+    both still Cu chemically, both needing the same Hubbard U.
 
-    For per-atom AFM starting moments (alternating +/- on Cu in CuO), set
-    ``atoms.set_initial_magnetic_moments(...)`` BEFORE calling
+    For per-atom AFM starting moments (alternating +/- on Cu in CuO),
+    set ``atoms.set_initial_magnetic_moments(...)`` BEFORE calling
     :func:`write_pw_input`; ASE will write per-species
     ``starting_magnetization(i)`` cards derived from those values and
-    will overwrite any ``starting_magnetization`` you pass through this
-    helper. The :func:`build_bulk_cuo` builder sets the AFM moments
-    automatically.
+    will overwrite any ``starting_magnetization`` you pass through
+    this helper. The :func:`build_bulk_cuo` builder sets the AFM
+    moments automatically.
 
     Args:
         atoms: Structure being computed. Used to determine the species
             list (chemical symbols + per-atom magnetic moments).
         nspin: 1 (non-magnetic) or 2 (collinear spin-polarized).
-        hubbard_u: Mapping from chemical symbol to U value in eV. Species
-            not present in the structure are silently ignored.
-        starting_magnetization: Mapping from symbol to initial moment, OR
-            a sequence indexed by species order. Use this only when
-            ``atoms`` has no per-atom magmoms set (otherwise ASE
+        hubbard_u: Mapping from chemical symbol to U value in eV.
+            Species not present in the structure are silently ignored.
+        starting_magnetization: Mapping from symbol to initial moment,
+            OR a sequence indexed by species order. Use this only
+            when ``atoms`` has no per-atom magmoms set (otherwise ASE
             overrides). For AFM, set per-atom magmoms on ``atoms``.
+        projector_type: QE HUBBARD-card projector. Default
+            :data:`DEFAULT_HUBBARD_PROJECTOR_TYPE` (``"atomic"``)
+            reproduces the pre-7.1 ``lda_plus_u_kind=0`` semantics so
+            literature U values stay comparable.
+        manifolds: Override / extend the default
+            :data:`DEFAULT_HUBBARD_MANIFOLDS` (``{"Cu": "3d", ...}``).
+            Unknown symbols raise ``KeyError`` rather than silently
+            dropping the U term.
 
     Returns:
-        A namelist-override dict suitable for the ``extra_input_data``
-        argument of :func:`write_pw_input`.
+        :class:`SpinHubbardOverrides` carrying the namelist overrides
+        and (optionally) the HUBBARD card text.
 
     Example:
         >>> from copper_oxide_dft.structure_builder import (
         ...     build_bulk_cu2o, build_bulk_cuo
         ... )
         >>> # Non-magnetic Cu2O: one Cu species, U on Cu.
-        >>> overrides = spin_and_hubbard_overrides(
+        >>> ov = spin_and_hubbard_overrides(
         ...     build_bulk_cu2o(), nspin=1, hubbard_u={"Cu": 4.0}
         ... )
-        >>> overrides["system"]["nspin"]
+        >>> ov.namelist_overrides["system"]["nspin"]
         1
-        >>> overrides["system"]["Hubbard_U(1)"]
-        4.0
+        >>> "U Cu-3d 4.000000" in ov.hubbard_card
+        True
         >>> # AFM CuO: two Cu species (the +/- sublattices), U on BOTH.
-        >>> overrides = spin_and_hubbard_overrides(
+        >>> ov = spin_and_hubbard_overrides(
         ...     build_bulk_cuo(), nspin=2, hubbard_u={"Cu": 4.0}
         ... )
-        >>> overrides["system"]["Hubbard_U(1)"]
-        4.0
-        >>> overrides["system"]["Hubbard_U(2)"]
-        4.0
+        >>> "U Cu-3d 4.000000" in ov.hubbard_card
+        True
+        >>> "U Cu1-3d 4.000000" in ov.hubbard_card
+        True
     """
     if nspin not in (1, 2):
         raise ValueError(f"nspin must be 1 or 2, got {nspin}")
@@ -285,11 +400,6 @@ def spin_and_hubbard_overrides(
     species_pairs = _ase_species_breakdown(atoms, nspin=nspin)
 
     system: dict[str, Any] = {"nspin": nspin}
-
-    if hubbard_u:
-        for i, (_, symbol) in enumerate(species_pairs, start=1):
-            if symbol in hubbard_u:
-                system[f"Hubbard_U({i})"] = float(hubbard_u[symbol])
 
     if starting_magnetization is not None:
         if isinstance(starting_magnetization, Mapping):
@@ -302,7 +412,24 @@ def spin_and_hubbard_overrides(
             for i, mag in enumerate(starting_magnetization, start=1):
                 system[f"starting_magnetization({i})"] = float(mag)
 
-    return {"system": system}
+    hubbard_card = ""
+    if hubbard_u:
+        species_labels = _ase_species_labels(species_pairs)
+        manifold_map = dict(DEFAULT_HUBBARD_MANIFOLDS)
+        if manifolds:
+            manifold_map.update(manifolds)
+        hubbard_card = _build_hubbard_card(
+            species_pairs,
+            species_labels,
+            hubbard_u,
+            manifold_map,
+            projector_type,
+        )
+
+    return SpinHubbardOverrides(
+        namelist_overrides={"system": system},
+        hubbard_card=hubbard_card,
+    )
 
 
 SHE_ABSOLUTE_POTENTIAL_V = 4.44

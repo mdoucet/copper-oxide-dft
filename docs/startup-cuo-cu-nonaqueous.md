@@ -1160,8 +1160,9 @@ for coverage in (1/4, 1/2, 3/4, 1.0):
     covered = add_oxygen_adsorbates(slab, coverage_ml=coverage, site="fcc")
     label = f"{int(coverage * 100):03d}"
 
+    spin = spin_and_hubbard_overrides(covered, nspin=2, hubbard_u={"Cu": 4.0})
     overrides = merge_namelist_overrides(
-        spin_and_hubbard_overrides(covered, nspin=2, hubbard_u={"Cu": 4.0}),
+        spin.namelist_overrides,
         {"system": {"nosym": True, "noinv": True}},
     )
     write_pw_input(
@@ -1172,6 +1173,7 @@ for coverage in (1/4, 1/2, 3/4, 1.0):
         kpts=(6, 6, 1),
         ecutwfc=cu.ecutwfc_ry,
         degauss=cu.degauss_ry,
+        additional_cards=spin.hubbard_card,  # QE 7.1+ HUBBARD card
         extra_input_data=overrides,
     )
 PY

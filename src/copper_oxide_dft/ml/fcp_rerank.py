@@ -137,7 +137,7 @@ def prepare_fcp_inputs(
         spin = spin_and_hubbard_overrides(
             atoms, nspin=2, hubbard_u={"Cu": hubbard_u_ev}
         )
-        merged = merge_namelist_overrides(fcp, spin)
+        merged = merge_namelist_overrides(fcp, spin.namelist_overrides)
 
         sample_dir = out_root / f"candidate_{idx:02d}"
         sample_dir.mkdir(parents=True, exist_ok=True)
@@ -152,6 +152,7 @@ def prepare_fcp_inputs(
             degauss=system_config.degauss_ry,
             pseudo_dir=pseudo_dir,
             extra_input_data=merged,
+            additional_cards=spin.hubbard_card,
         )
         written.append(path)
     return written

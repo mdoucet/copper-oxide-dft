@@ -187,9 +187,13 @@ def test_prepare_fcp_inputs_writes_spin_and_hubbard_for_cu_o(
         candidates, tmp_path / "rerank",
         system_config=phase1_config, pseudo_dir=pseudo_dir,
     )
-    text = (tmp_path / "rerank" / "candidate_00" / "pw.in").read_text().lower()
-    assert "nspin" in text
-    assert "hubbard_u" in text
+    text = (tmp_path / "rerank" / "candidate_00" / "pw.in").read_text()
+    assert "nspin" in text.lower()
+    # QE 7.1+ HUBBARD card; the old &SYSTEM Hubbard_U(i) keys would
+    # cause QE to abort with "DFT+Hubbard input syntax has changed".
+    assert "HUBBARD {atomic}" in text
+    assert "U Cu-3d" in text
+    assert "hubbard_u(1)" not in text.lower()
 
 
 def test_prepare_fcp_inputs_rejects_empty_candidates(
