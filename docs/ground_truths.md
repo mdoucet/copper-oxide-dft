@@ -347,6 +347,60 @@ re-litigated:
   retired 2026-05-19 with the switch from GOCIA to `ase-ga`; see the
   2026-05-19 entry below.)
 
+### 2026-05-19: Hubbard projector + U calibration for AFM CuO
+
+After the HUBBARD card migration landed (entry below), the first Phase 3.2
+production run on the DGX Spark with the previously-default settings
+(``atomic`` projector + U=4 eV) converged to a **non-magnetic, metallic**
+solution — qualitatively wrong for CuO. The Mosey/Carter literature
+``U=4 eV on Cu 3d`` does not transfer to PseudoDojo PBE PAW pseudopotentials
+with the legacy ``atomic`` projectors.
+
+**Diagnostic data from the failing run** (8-atom AFM CuO cell, vc-relax):
+
+- Absolute magnetization: 0.00 µ_B/cell (expected ~2–3).
+- Per-Cu site moments: ~7 × 10⁻⁴ µ_B (collapsed to numerical noise).
+- ``Number of occupied Hubbard levels = 38.36`` → 4 × d⁹·⁵⁹ (hovering, not localised to d⁹ = Cu²⁺).
+- ``Atomic wfc used for Hubbard projectors are NOT orthogonalized`` warning from QE.
+
+**Working calibration**: ``ortho-atomic`` projector + U=6 eV gives:
+
+- Absolute magnetization: 3.31 µ_B/cell.
+- Per-Cu site moments: ±0.638 µ_B (textbook type-II AFM ordering).
+- Tiny ±0.015 µ_B on O sites — expected residual O 2p hole character.
+- ``magnetic_ordering = "AFM"`` (the parse-CLI heuristic concurs).
+
+**Why ``atomic`` failed**: the non-orthogonalised atomic projectors overlap
+between Cu and O states, leaking the Hubbard penalty out to non-d electrons.
+This weakens the *effective* on-site U enough that the AFM solution
+isn't stabilised against the (lower-energy-at-fixed-projector) non-magnetic
+collapse.
+
+**Project defaults updated** ([qe_input.py](../src/copper_oxide_dft/qe_input.py)):
+
+- ``DEFAULT_HUBBARD_PROJECTOR_TYPE = "ortho-atomic"`` (was ``"atomic"``).
+- ``DEFAULT_HUBBARD_U_CU_3D_EV = 6.0`` (was ``4.0``).
+
+**CLI flag added**: ``copper-oxide-dft make-pourbaix-inputs --projector-type
+{atomic,ortho-atomic,norm-atomic,wf,pseudo}`` and ``copper-oxide-dft sweep
+--projector-type ...``.
+
+**Caveats**:
+
+1. ``U=6 eV with ortho-atomic`` is calibrated to "AFM survives with
+   reasonable moments". It is **not** a manuscript-defensible value — for
+   a published number, run an hp.x linear-response sweep
+   ([qe_input.write_hp_input](../src/copper_oxide_dft/qe_input.py)) and
+   refine.
+2. Cross-comparing energies across projector types or U values is
+   meaningless (different functionals, effectively). Lock the choice
+   before generating any dataset that downstream code will compare.
+3. The smearing in the project's defaults (``degauss = 0.02 Ry`` ≈ 0.27 eV)
+   is comparable to the expected ~1 eV gap, so QE may not emit the
+   ``highest occupied, lowest unoccupied`` line even when the system is a
+   real insulator. The AFM ordering + absolute magnetization is the
+   load-bearing diagnostic; gap reporting via ``parse`` is best-effort.
+
 ### 2026-05-19: Hubbard input syntax — moved to the HUBBARD card
 
 Quantum ESPRESSO 7.1 (released Dec 2022) removed the legacy DFT+U

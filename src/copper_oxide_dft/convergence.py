@@ -43,6 +43,7 @@ def sweep_convergence(
     values: Sequence[float] | Sequence[int],
     pseudo_dir: str | os.PathLike[str] | None = None,
     base_kwargs: Mapping[str, Any] | None = None,
+    projector_type: str | None = None,
 ) -> list[Path]:
     """Generate one ``pw.x`` SCF input per value of a sweep parameter.
 
@@ -60,6 +61,10 @@ def sweep_convergence(
         base_kwargs: Extra keyword arguments forwarded to
             :func:`write_pw_input` for every point (e.g. ``{"ecutwfc": 80}``
             while sweeping kpts). The swept parameter must not appear here.
+        projector_type: QE HUBBARD-card projector. Only consumed by the
+            ``param="hubbard_u"`` branch (and silently ignored otherwise).
+            ``None`` (default) falls through to
+            :data:`copper_oxide_dft.qe_input.DEFAULT_HUBBARD_PROJECTOR_TYPE`.
 
     Returns:
         Paths to the generated input files, in sweep order.
@@ -96,14 +101,16 @@ def sweep_convergence(
             # AFM CuO will be nspin=2 automatically. QE 7.1+ requires the
             # HUBBARD card (additional_cards=) instead of the deprecated
             # Hubbard_U(i) namelist keys.
-            magnetic = any(
-                m != 0.0 for m in atoms.get_initial_magnetic_moments()
-            )
+            magnetic = any(m != 0.0 for m in atoms.get_initial_magnetic_moments())
             nspin = 2 if magnetic else 1
             existing_extra = dict(kwargs.pop("extra_input_data", {}) or {})
-            overrides = spin_and_hubbard_overrides(
-                atoms, nspin=nspin, hubbard_u={"Cu": float(value)}
-            )
+            hubbard_kwargs: dict[str, Any] = {
+                "nspin": nspin,
+                "hubbard_u": {"Cu": float(value)},
+            }
+            if projector_type is not None:
+                hubbard_kwargs["projector_type"] = projector_type
+            overrides = spin_and_hubbard_overrides(atoms, **hubbard_kwargs)
             for namelist, entries in overrides.namelist_overrides.items():
                 existing_extra.setdefault(namelist, {}).update(entries)
             kwargs["extra_input_data"] = existing_extra

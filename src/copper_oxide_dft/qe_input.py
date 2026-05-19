@@ -31,17 +31,29 @@ DEFAULT_DEGAUSS_RY = 0.02
 """Smearing width for Marzari-Vanderbilt cold smearing. Required for metallic Cu;
 see docs/ground_truths.md (Cu oxide DFT gotchas)."""
 
-DEFAULT_HUBBARD_U_CU_3D_EV = 4.0
-"""Default Hubbard U on Cu 3d (eV). Literature pick (Mosey/Carter ~4 eV) for the
-Phase 4 Pourbaix work; calibrate via hp.x linear response in Phase 2."""
+DEFAULT_HUBBARD_U_CU_3D_EV = 6.0
+"""Default Hubbard U on Cu 3d (eV).
 
-DEFAULT_HUBBARD_PROJECTOR_TYPE = "atomic"
-"""QE 7.1+ HUBBARD-card projector type. ``atomic`` reproduces the
-``lda_plus_u_kind=0`` default that older literature U values
-(Mosey/Carter 4 eV on Cu 3d) were derived against. Switching to
-``ortho-atomic`` (QE's current recommendation for new calculations)
-shifts the effective U by typically 0.5–1.0 eV — do not flip the
-default without re-doing the hp.x calibration."""
+**Calibrated 2026-05-19** against PseudoDojo PBE PAW + ortho-atomic
+projectors on AFM CuO (DGX Spark): U=6 eV stabilises the AFM ground
+state with per-Cu moments ≈ ±0.64 µ_B and |mag| ≈ 3.3 µ_B/cell. The
+older Mosey/Carter literature pick (U=4 eV) was derived for a
+different projector / pseudopotential combination and does **not**
+preserve AFM ordering with our setup — at U=4 the SCF collapses to a
+non-magnetic, metallic solution. See ``docs/ground_truths.md`` for
+the full calibration story. Refine via hp.x linear response in
+Phase 3 if a manuscript-defensible number is needed."""
+
+DEFAULT_HUBBARD_PROJECTOR_TYPE = "ortho-atomic"
+"""QE 7.1+ HUBBARD-card projector type.
+
+``ortho-atomic`` is QE's current recommendation for new calculations
+and is the projector we calibrated :data:`DEFAULT_HUBBARD_U_CU_3D_EV`
+against. The bare ``atomic`` projectors are *not* orthogonalised
+(QE prints a warning about it), which lets the Hubbard penalty leak
+between Cu and O states and weakens the effective on-site U; on AFM
+CuO this is enough to lose the magnetic ground state entirely at the
+literature U=4 eV. See ``docs/ground_truths.md`` 2026-05-19 entry."""
 
 DEFAULT_HUBBARD_MANIFOLDS: Mapping[str, str] = {
     "Cu": "3d",
@@ -364,9 +376,10 @@ def spin_and_hubbard_overrides(
             when ``atoms`` has no per-atom magmoms set (otherwise ASE
             overrides). For AFM, set per-atom magmoms on ``atoms``.
         projector_type: QE HUBBARD-card projector. Default
-            :data:`DEFAULT_HUBBARD_PROJECTOR_TYPE` (``"atomic"``)
-            reproduces the pre-7.1 ``lda_plus_u_kind=0`` semantics so
-            literature U values stay comparable.
+            :data:`DEFAULT_HUBBARD_PROJECTOR_TYPE` (``"ortho-atomic"``)
+            is QE's modern recommendation; ``"atomic"`` is the legacy
+            choice and is known to fail on AFM CuO at U=4 eV with our
+            PseudoDojo PAW pseudopotentials.
         manifolds: Override / extend the default
             :data:`DEFAULT_HUBBARD_MANIFOLDS` (``{"Cu": "3d", ...}``).
             Unknown symbols raise ``KeyError`` rather than silently
@@ -386,15 +399,15 @@ def spin_and_hubbard_overrides(
         ... )
         >>> ov.namelist_overrides["system"]["nspin"]
         1
-        >>> "U Cu-3d 4.000000" in ov.hubbard_card
+        >>> "U Cu-3d 6.000000" in ov.hubbard_card
         True
         >>> # AFM CuO: two Cu species (the +/- sublattices), U on BOTH.
         >>> ov = spin_and_hubbard_overrides(
-        ...     build_bulk_cuo(), nspin=2, hubbard_u={"Cu": 4.0}
+        ...     build_bulk_cuo(), nspin=2, hubbard_u={"Cu": 6.0}
         ... )
-        >>> "U Cu-3d 4.000000" in ov.hubbard_card
+        >>> "U Cu-3d 6.000000" in ov.hubbard_card
         True
-        >>> "U Cu1-3d 4.000000" in ov.hubbard_card
+        >>> "U Cu1-3d 6.000000" in ov.hubbard_card
         True
     """
     if nspin not in (1, 2):
@@ -609,9 +622,7 @@ def _format_namelist_value(value: Any) -> str:
     return str(value)
 
 
-def _ase_species_breakdown(
-    atoms: Atoms, *, nspin: int
-) -> list[tuple[float, str]]:
+def _ase_species_breakdown(atoms: Atoms, *, nspin: int) -> list[tuple[float, str]]:
     """Mirror ASE's QE-writer species-splitting algorithm.
 
     Returns a list of ``(magmom, symbol)`` tuples in the order ASE will
@@ -626,9 +637,7 @@ def _ase_species_breakdown(
     seen: dict[tuple[str, float], None] = {}
     ordered: list[tuple[float, str]] = []
     for symbol, magmom in zip(atoms.get_chemical_symbols(), magmoms, strict=True):
-        key: tuple[str, float] = (
-            (symbol, float(magmom)) if magnetic else (symbol, 0.0)
-        )
+        key: tuple[str, float] = (symbol, float(magmom)) if magnetic else (symbol, 0.0)
         if key not in seen:
             seen[key] = None
             ordered.append((float(magmom), symbol))

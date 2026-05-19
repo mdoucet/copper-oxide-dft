@@ -50,7 +50,9 @@ def pseudo_dir(tmp_path: Path) -> Path:
 @pytest.fixture
 def phase1_config() -> SystemConfig:
     return SystemConfig(
-        ecutwfc_ry=100.0, kpts=(18, 18, 18), degauss_ry=0.01,
+        ecutwfc_ry=100.0,
+        kpts=(18, 18, 18),
+        degauss_ry=0.01,
         extras={"lattice_a_ang": 3.6577},
     )
 
@@ -65,7 +67,10 @@ def _phase(atoms, energy=-100.0, mu_o=-6.5):
 def test_grand_potential_at_u_neutral_cell_equals_energy() -> None:
     """A run with tot_charge = 0 → Ω(U) = E_DFT exactly, regardless of U."""
     omega = grand_potential_at_u(
-        energy_ev=-100.0, tot_charge=0.0, u_target_v=-0.8, reference_absolute_v=4.64,
+        energy_ev=-100.0,
+        tot_charge=0.0,
+        u_target_v=-0.8,
+        reference_absolute_v=4.64,
     )
     assert omega == -100.0
 
@@ -109,9 +114,7 @@ def test_parse_tot_charge_finds_last_occurrence(tmp_path: Path) -> None:
     """If pw.out has multiple tot_charge lines (FCP iterates), pick the last."""
     out = tmp_path / "pw.out"
     out.write_text(
-        "tot_charge =   0.500000\n"
-        "tot_charge =   0.300000\n"
-        "tot_charge =   0.281234\n"
+        "tot_charge =   0.500000\ntot_charge =   0.300000\ntot_charge =   0.281234\n"
     )
     assert parse_fcp_tot_charge(out) == pytest.approx(0.281234)
 
@@ -142,9 +145,9 @@ def test_parse_tot_charge_does_not_match_prefixed_variants(tmp_path: Path) -> No
     """
     out = tmp_path / "pw.out"
     out.write_text(
-        "tot_charge =  0.100\n"          # real, should win
-        "new_tot_charge =  0.999\n"      # prefixed variant, must NOT match
-        "my_tot_charge =  -0.500\n"      # another prefixed variant
+        "tot_charge =  0.100\n"  # real, should win
+        "new_tot_charge =  0.999\n"  # prefixed variant, must NOT match
+        "my_tot_charge =  -0.500\n"  # another prefixed variant
     )
     assert parse_fcp_tot_charge(out) == pytest.approx(0.100)
 
@@ -155,10 +158,16 @@ def test_parse_tot_charge_does_not_match_prefixed_variants(tmp_path: Path) -> No
 def test_prepare_fcp_inputs_creates_one_dir_per_candidate(
     tmp_path: Path, pseudo_dir: Path, phase1_config: SystemConfig
 ) -> None:
-    candidates = [_phase(build_bulk_cu()), _phase(build_bulk_cu2o()), _phase(build_bulk_cuo())]
+    candidates = [
+        _phase(build_bulk_cu()),
+        _phase(build_bulk_cu2o()),
+        _phase(build_bulk_cuo()),
+    ]
     paths = prepare_fcp_inputs(
-        candidates, tmp_path / "rerank",
-        system_config=phase1_config, pseudo_dir=pseudo_dir,
+        candidates,
+        tmp_path / "rerank",
+        system_config=phase1_config,
+        pseudo_dir=pseudo_dir,
     )
     assert len(paths) == 3
     for i in range(3):
@@ -170,8 +179,10 @@ def test_prepare_fcp_inputs_writes_fcp_keywords(
 ) -> None:
     candidates = [_phase(build_bulk_cu2o())]
     prepare_fcp_inputs(
-        candidates, tmp_path / "rerank",
-        system_config=phase1_config, pseudo_dir=pseudo_dir,
+        candidates,
+        tmp_path / "rerank",
+        system_config=phase1_config,
+        pseudo_dir=pseudo_dir,
     )
     text = (tmp_path / "rerank" / "candidate_00" / "pw.in").read_text().lower()
     assert "lfcp" in text
@@ -184,14 +195,16 @@ def test_prepare_fcp_inputs_writes_spin_and_hubbard_for_cu_o(
 ) -> None:
     candidates = [_phase(build_bulk_cu2o())]
     prepare_fcp_inputs(
-        candidates, tmp_path / "rerank",
-        system_config=phase1_config, pseudo_dir=pseudo_dir,
+        candidates,
+        tmp_path / "rerank",
+        system_config=phase1_config,
+        pseudo_dir=pseudo_dir,
     )
     text = (tmp_path / "rerank" / "candidate_00" / "pw.in").read_text()
     assert "nspin" in text.lower()
     # QE 7.1+ HUBBARD card; the old &SYSTEM Hubbard_U(i) keys would
     # cause QE to abort with "DFT+Hubbard input syntax has changed".
-    assert "HUBBARD { atomic }" in text
+    assert "HUBBARD { ortho-atomic }" in text
     assert "U Cu-3d" in text
     assert "hubbard_u(1)" not in text.lower()
 
@@ -201,8 +214,10 @@ def test_prepare_fcp_inputs_rejects_empty_candidates(
 ) -> None:
     with pytest.raises(ValueError):
         prepare_fcp_inputs(
-            [], tmp_path / "rerank",
-            system_config=phase1_config, pseudo_dir=pseudo_dir,
+            [],
+            tmp_path / "rerank",
+            system_config=phase1_config,
+            pseudo_dir=pseudo_dir,
         )
 
 
@@ -211,8 +226,10 @@ def test_prepare_fcp_inputs_uses_phase1_ecutwfc(
 ) -> None:
     candidates = [_phase(build_bulk_cu())]
     prepare_fcp_inputs(
-        candidates, tmp_path / "rerank",
-        system_config=phase1_config, pseudo_dir=pseudo_dir,
+        candidates,
+        tmp_path / "rerank",
+        system_config=phase1_config,
+        pseudo_dir=pseudo_dir,
     )
     text = (tmp_path / "rerank" / "candidate_00" / "pw.in").read_text()
     _assert_namelist_value(text, "ecutwfc", 100.0)
@@ -226,8 +243,10 @@ def test_write_frontier_submit_scripts_one_per_pwin(
 ) -> None:
     candidates = [_phase(build_bulk_cu()), _phase(build_bulk_cu2o())]
     prepare_fcp_inputs(
-        candidates, tmp_path / "rerank",
-        system_config=phase1_config, pseudo_dir=pseudo_dir,
+        candidates,
+        tmp_path / "rerank",
+        system_config=phase1_config,
+        pseudo_dir=pseudo_dir,
     )
     scripts = write_frontier_submit_scripts(tmp_path / "rerank", account="DUMMY")
     assert len(scripts) == 2
@@ -241,8 +260,10 @@ def test_write_frontier_submit_scripts_use_frontier_conventions(
 ) -> None:
     candidates = [_phase(build_bulk_cu())]
     prepare_fcp_inputs(
-        candidates, tmp_path / "rerank",
-        system_config=phase1_config, pseudo_dir=pseudo_dir,
+        candidates,
+        tmp_path / "rerank",
+        system_config=phase1_config,
+        pseudo_dir=pseudo_dir,
     )
     scripts = write_frontier_submit_scripts(tmp_path / "rerank", account="ABC123")
     text = scripts[0].read_text()
@@ -261,8 +282,7 @@ def _write_fake_fcp_pw_out(
 ) -> None:
     text = (
         f"!    total energy              =  {energy_ry:.6f} Ry\n"
-        f"tot_charge =  {tot_charge:.6f}\n"
-        + ("JOB DONE.\n" if job_done else "")
+        f"tot_charge =  {tot_charge:.6f}\n" + ("JOB DONE.\n" if job_done else "")
     )
     path.write_text(text)
 
@@ -302,8 +322,7 @@ def test_rank_fcp_results_unconverged_trail(tmp_path: Path) -> None:
     d1 = out_root / "candidate_01"
     d1.mkdir()
     (d1 / "pw.out").write_text(
-        "!    total energy              =  -99.000000 Ry\n"
-        "JOB DONE.\n"
+        "!    total energy              =  -99.000000 Ry\nJOB DONE.\n"
     )
 
     results = rank_fcp_results(out_root)

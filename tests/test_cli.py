@@ -216,11 +216,18 @@ def test_cli_pourbaix_saves_png_and_json(tmp_path: Path) -> None:
         main,
         [
             "pourbaix",
-            "--u", "-0.4", "--ph", "7",
-            "--png", str(png),
-            "--json", str(json_path),
-            "--u-steps", "21",
-            "--ph-steps", "15",
+            "--u",
+            "-0.4",
+            "--ph",
+            "7",
+            "--png",
+            str(png),
+            "--json",
+            str(json_path),
+            "--u-steps",
+            "21",
+            "--ph-steps",
+            "15",
         ],
     )
     assert result.exit_code == 0, result.output
@@ -240,14 +247,16 @@ def test_cli_pourbaix_accepts_custom_energies_json(tmp_path: Path) -> None:
 
     energies = tmp_path / "energies.json"
     energies.write_text(
-        _json.dumps({
-            "references": {"e_h2_ev": 0.0, "e_h2o_ev": -2.458},
-            "phases": [
-                {"name": "Cu", "n_cu": 1, "n_o": 0, "e_dft_ev": 0.0},
-                {"name": "Cu2O", "n_cu": 2, "n_o": 1, "e_dft_ev": -1.534},
-                {"name": "CuO", "n_cu": 1, "n_o": 1, "e_dft_ev": -1.344},
-            ],
-        })
+        _json.dumps(
+            {
+                "references": {"e_h2_ev": 0.0, "e_h2o_ev": -2.458},
+                "phases": [
+                    {"name": "Cu", "n_cu": 1, "n_o": 0, "e_dft_ev": 0.0},
+                    {"name": "Cu2O", "n_cu": 2, "n_o": 1, "e_dft_ev": -1.534},
+                    {"name": "CuO", "n_cu": 1, "n_o": 1, "e_dft_ev": -1.344},
+                ],
+            }
+        )
     )
     runner = CliRunner()
     result = runner.invoke(
@@ -278,7 +287,8 @@ def test_cli_make_pourbaix_inputs_writes_full_tree(tmp_path: Path) -> None:
         [
             "make-pourbaix-inputs",
             str(root),
-            "--pseudo-dir", str(pseudo_dir),
+            "--pseudo-dir",
+            str(pseudo_dir),
         ],
     )
     assert result.exit_code == 0, result.output
@@ -286,7 +296,9 @@ def test_cli_make_pourbaix_inputs_writes_full_tree(tmp_path: Path) -> None:
         assert (root / sub / "pw.in").is_file(), f"missing {sub}/pw.in"
 
 
-def test_cli_make_pourbaix_inputs_cuo_input_has_spin_and_hubbard(tmp_path: Path) -> None:
+def test_cli_make_pourbaix_inputs_cuo_input_has_spin_and_hubbard(
+    tmp_path: Path,
+) -> None:
     """CuO is the magnetic + DFT+U case; both must end up in the namelist."""
     pseudo_dir = tmp_path / "pseudos"
     pseudo_dir.mkdir()
@@ -300,8 +312,10 @@ def test_cli_make_pourbaix_inputs_cuo_input_has_spin_and_hubbard(tmp_path: Path)
         [
             "make-pourbaix-inputs",
             str(root),
-            "--pseudo-dir", str(pseudo_dir),
-            "--hubbard-u", "4.5",
+            "--pseudo-dir",
+            str(pseudo_dir),
+            "--hubbard-u",
+            "4.5",
         ],
     )
     assert result.exit_code == 0, result.output
@@ -317,6 +331,40 @@ def test_cli_make_pourbaix_inputs_cuo_input_has_spin_and_hubbard(tmp_path: Path)
     assert "hubbard_u(1)" not in cuo_lower
     # Per-atom starting magnetizations come through ASE for the AFM ordering.
     assert "starting_magnetization" in cuo_lower
+    # And the default projector is ortho-atomic (the 2026-05-19 calibration).
+    assert "HUBBARD { ortho-atomic }" in cuo_text
+
+
+def test_cli_make_pourbaix_inputs_projector_type_flag(tmp_path: Path) -> None:
+    """--projector-type threads through to the HUBBARD card.
+
+    Uses ``atomic`` because it is the now-non-default value — verifies
+    the flag does something, not that the default does what it should
+    (the test above already covers the default path).
+    """
+    pseudo_dir = tmp_path / "pseudos"
+    pseudo_dir.mkdir()
+    for f in ("Cu.upf", "O.upf", "H.upf"):
+        (pseudo_dir / f).write_text("")
+
+    root = tmp_path / "phase4"
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "make-pourbaix-inputs",
+            str(root),
+            "--pseudo-dir",
+            str(pseudo_dir),
+            "--projector-type",
+            "atomic",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    for sub in ("bulk_cu2o", "bulk_cuo"):
+        text = (root / sub / "pw.in").read_text()
+        assert "HUBBARD { atomic }" in text
+        assert "ortho-atomic" not in text
 
 
 def test_cli_sweep_analyze_picks_converged_value(tmp_path: Path) -> None:
@@ -331,10 +379,14 @@ def test_cli_sweep_analyze_picks_converged_value(tmp_path: Path) -> None:
         main,
         [
             "sweep",
-            "--param", "ecutwfc",
-            "--values", "40,60,80",
-            "--out", str(tmp_path / "conv"),
-            "--pseudo-dir", str(pseudo_dir),
+            "--param",
+            "ecutwfc",
+            "--values",
+            "40,60,80",
+            "--out",
+            str(tmp_path / "conv"),
+            "--pseudo-dir",
+            str(pseudo_dir),
         ],
     )
     # Synthesize pw.out files where energy plateaus by ecutwfc=60 (per-atom).
@@ -362,10 +414,14 @@ def test_cli_sweep_analyze_exits_nonzero_when_not_converged(tmp_path: Path) -> N
         main,
         [
             "sweep",
-            "--param", "ecutwfc",
-            "--values", "40,60",
-            "--out", str(tmp_path / "conv"),
-            "--pseudo-dir", str(pseudo_dir),
+            "--param",
+            "ecutwfc",
+            "--values",
+            "40,60",
+            "--out",
+            str(tmp_path / "conv"),
+            "--pseudo-dir",
+            str(pseudo_dir),
         ],
     )
     # Steep slope between the two points — neither converges at 1 meV/atom.
@@ -393,9 +449,7 @@ def test_cli_aggregate_pourbaix_energies_writes_consumable_json(tmp_path: Path) 
     ):
         d = root / sub
         d.mkdir(parents=True)
-        (d / "pw.out").write_text(
-            f"!    total energy = {energy_ry} Ry\nJOB DONE.\n"
-        )
+        (d / "pw.out").write_text(f"!    total energy = {energy_ry} Ry\nJOB DONE.\n")
 
     runner = CliRunner()
     out_json = tmp_path / "energies.json"
@@ -446,7 +500,9 @@ def test_cli_aggregate_pourbaix_energies_requires_job_done_by_default(
     assert "did not finish" in result.output
 
 
-def test_cli_aggregate_pourbaix_energies_allow_incomplete_passes(tmp_path: Path) -> None:
+def test_cli_aggregate_pourbaix_energies_allow_incomplete_passes(
+    tmp_path: Path,
+) -> None:
     root = tmp_path / "phase4"
     for sub in ("bulk_cu", "bulk_cu2o", "bulk_cuo", "mol_h2", "mol_h2o"):
         d = root / sub

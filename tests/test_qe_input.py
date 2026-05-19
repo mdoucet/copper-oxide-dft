@@ -179,15 +179,13 @@ def test_supported_calculations_includes_expected_modes() -> None:
 def test_spin_and_hubbard_overrides_emits_hubbard_card_for_cu2o() -> None:
     """Cu2O: Cu species labelled 'Cu' in the new HUBBARD card."""
     cu2o = build_bulk_cu2o()
-    overrides = spin_and_hubbard_overrides(
-        cu2o, nspin=1, hubbard_u={"Cu": 4.0}
-    )
+    overrides = spin_and_hubbard_overrides(cu2o, nspin=1, hubbard_u={"Cu": 4.0})
     # No Hubbard_U(i) in &SYSTEM — QE 7.1+ rejects that syntax.
     system = overrides.namelist_overrides["system"]
     assert system["nspin"] == 1
     assert not any(k.startswith("Hubbard_U(") for k in system)
     # The card carries the U on Cu-3d.
-    assert "HUBBARD { atomic }" in overrides.hubbard_card
+    assert "HUBBARD { ortho-atomic }" in overrides.hubbard_card
     assert "U Cu-3d 4.000000" in overrides.hubbard_card
 
 
@@ -266,7 +264,7 @@ def test_spin_and_hubbard_overrides_compose_with_write_pw_input(
     # Namelist piece (case-insensitive).
     assert "nspin" in text.lower()
     # Card piece (case-preserving).
-    assert "HUBBARD { atomic }" in text
+    assert "HUBBARD { ortho-atomic }" in text
     assert "U Cu-3d 4.000000" in text
     # And the deprecated form must NOT appear — that's exactly what QE 7.1+ rejects.
     assert "hubbard_u(1)" not in text.lower()
@@ -310,12 +308,17 @@ def test_spin_and_hubbard_overrides_unknown_manifold_raises() -> None:
 
 
 def test_spin_and_hubbard_overrides_projector_type_propagates() -> None:
-    """Non-default projector (e.g. ortho-atomic) flows into the card header."""
+    """Non-default projector flows through to the card header.
+
+    Uses ``atomic`` (the legacy projector — known to fail for AFM CuO
+    with our PP, but a useful sanity-check value to confirm the
+    ``projector_type=`` kwarg is honoured).
+    """
     cu2o = build_bulk_cu2o()
     overrides = spin_and_hubbard_overrides(
-        cu2o, nspin=1, hubbard_u={"Cu": 4.0}, projector_type="ortho-atomic"
+        cu2o, nspin=1, hubbard_u={"Cu": 4.0}, projector_type="atomic"
     )
-    assert "HUBBARD { ortho-atomic }" in overrides.hubbard_card
+    assert "HUBBARD { atomic }" in overrides.hubbard_card
 
 
 # ---- write_hp_input --------------------------------------------------------
@@ -456,6 +459,6 @@ def test_merge_namelist_overrides_zero_sources_returns_empty() -> None:
 def test_default_pseudopotentials_covers_project_species() -> None:
     """Cu, O, H are the three species the project actually computes with."""
     assert set(DEFAULT_PSEUDOPOTENTIALS) >= {"Cu", "O", "H"}
-    for sym, fname in DEFAULT_PSEUDOPOTENTIALS.items():
+    for _sym, fname in DEFAULT_PSEUDOPOTENTIALS.items():
         # Filenames are PseudoDojo conventions: SymbolPart.upf at minimum.
         assert fname.endswith(".upf")

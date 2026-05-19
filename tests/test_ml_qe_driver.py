@@ -84,7 +84,8 @@ def test_write_dataset_writes_manifest_one_per_line(
     seed_labels = ["Cu_seed", "Cu2O_seed"]
     perts = [{"o_inserted": 0}, {"o_inserted": 1}]
     write_dataset_inputs(
-        structures, tmp_path / "ds",
+        structures,
+        tmp_path / "ds",
         system_config=phase1_config,
         seed_labels=seed_labels,
         perturbation_infos=perts,
@@ -110,12 +111,19 @@ def test_write_dataset_appends_to_existing_manifest(
 ) -> None:
     out = tmp_path / "ds"
     write_dataset_inputs(
-        [build_bulk_cu()], out, system_config=phase1_config, pseudo_dir=pseudo_dir,
+        [build_bulk_cu()],
+        out,
+        system_config=phase1_config,
+        pseudo_dir=pseudo_dir,
         write_runner_script=False,
     )
     write_dataset_inputs(
-        [build_bulk_cu2o()], out, system_config=phase1_config, pseudo_dir=pseudo_dir,
-        starting_index=1, write_runner_script=False,
+        [build_bulk_cu2o()],
+        out,
+        system_config=phase1_config,
+        pseudo_dir=pseudo_dir,
+        starting_index=1,
+        write_runner_script=False,
     )
     lines = (out / "manifest.jsonl").read_text().splitlines()
     assert len(lines) == 2
@@ -129,8 +137,11 @@ def test_write_dataset_rejects_negative_starting_index(
 ) -> None:
     with pytest.raises(ValueError):
         write_dataset_inputs(
-            [build_bulk_cu()], tmp_path / "ds",
-            system_config=phase1_config, pseudo_dir=pseudo_dir, starting_index=-1,
+            [build_bulk_cu()],
+            tmp_path / "ds",
+            system_config=phase1_config,
+            pseudo_dir=pseudo_dir,
+            starting_index=-1,
         )
 
 
@@ -139,8 +150,10 @@ def test_write_dataset_metadata_length_mismatch_raises(
 ) -> None:
     with pytest.raises(ValueError, match="length"):
         write_dataset_inputs(
-            [build_bulk_cu(), build_bulk_cu2o()], tmp_path / "ds",
-            system_config=phase1_config, pseudo_dir=pseudo_dir,
+            [build_bulk_cu(), build_bulk_cu2o()],
+            tmp_path / "ds",
+            system_config=phase1_config,
+            pseudo_dir=pseudo_dir,
             seed_labels=["only_one"],
         )
 
@@ -153,8 +166,10 @@ def test_pw_in_for_pure_cu_has_no_spin_keywords(
 ) -> None:
     """Pure Cu doesn't need nspin=2 — only structures with O get spin+U."""
     write_dataset_inputs(
-        [build_bulk_cu()], tmp_path / "ds",
-        system_config=phase1_config, pseudo_dir=pseudo_dir,
+        [build_bulk_cu()],
+        tmp_path / "ds",
+        system_config=phase1_config,
+        pseudo_dir=pseudo_dir,
     )
     text = (tmp_path / "ds" / "sample_00000" / "pw.in").read_text()
     assert "nspin" not in text.lower()
@@ -165,13 +180,15 @@ def test_pw_in_for_cu_o_has_spin_and_hubbard(
     tmp_path: Path, pseudo_dir: Path, phase1_config: SystemConfig
 ) -> None:
     write_dataset_inputs(
-        [build_bulk_cu2o()], tmp_path / "ds",
-        system_config=phase1_config, pseudo_dir=pseudo_dir,
+        [build_bulk_cu2o()],
+        tmp_path / "ds",
+        system_config=phase1_config,
+        pseudo_dir=pseudo_dir,
     )
     text = (tmp_path / "ds" / "sample_00000" / "pw.in").read_text()
     assert "nspin" in text.lower()
     # QE 7.1+ HUBBARD card carries the U on Cu-3d.
-    assert "HUBBARD { atomic }" in text
+    assert "HUBBARD { ortho-atomic }" in text
     assert "U Cu-3d" in text
     # Old &SYSTEM Hubbard_U(i) syntax would make QE 7.1+ abort.
     assert "hubbard_u(1)" not in text.lower()
@@ -181,8 +198,10 @@ def test_pw_in_pins_phase1_converged_settings(
     tmp_path: Path, pseudo_dir: Path, phase1_config: SystemConfig
 ) -> None:
     write_dataset_inputs(
-        [build_bulk_cu()], tmp_path / "ds",
-        system_config=phase1_config, pseudo_dir=pseudo_dir,
+        [build_bulk_cu()],
+        tmp_path / "ds",
+        system_config=phase1_config,
+        pseudo_dir=pseudo_dir,
     )
     text = (tmp_path / "ds" / "sample_00000" / "pw.in").read_text()
     # Phase 1 converged values, anchored to the namelist key so a coincidental
@@ -196,8 +215,10 @@ def test_pw_in_is_gamma_only(
 ) -> None:
     """Box-sampling supercells use Γ-only sampling regardless of bulk_cu kpts."""
     write_dataset_inputs(
-        [build_bulk_cu2o()], tmp_path / "ds",
-        system_config=phase1_config, pseudo_dir=pseudo_dir,
+        [build_bulk_cu2o()],
+        tmp_path / "ds",
+        system_config=phase1_config,
+        pseudo_dir=pseudo_dir,
     )
     text = (tmp_path / "ds" / "sample_00000" / "pw.in").read_text()
     # K_POINTS automatic\n1 1 1 0 0 0 — the (1,1,1) grid is the marker.
@@ -215,8 +236,10 @@ def test_pw_in_disables_symmetry(
     tmp_path: Path, pseudo_dir: Path, phase1_config: SystemConfig
 ) -> None:
     write_dataset_inputs(
-        [build_bulk_cu()], tmp_path / "ds",
-        system_config=phase1_config, pseudo_dir=pseudo_dir,
+        [build_bulk_cu()],
+        tmp_path / "ds",
+        system_config=phase1_config,
+        pseudo_dir=pseudo_dir,
     )
     text = (tmp_path / "ds" / "sample_00000" / "pw.in").read_text().lower()
     assert "nosym" in text
@@ -227,8 +250,10 @@ def test_pw_in_carries_manuscript_tolerances(
     tmp_path: Path, pseudo_dir: Path, phase1_config: SystemConfig
 ) -> None:
     write_dataset_inputs(
-        [build_bulk_cu()], tmp_path / "ds",
-        system_config=phase1_config, pseudo_dir=pseudo_dir,
+        [build_bulk_cu()],
+        tmp_path / "ds",
+        system_config=phase1_config,
+        pseudo_dir=pseudo_dir,
         calculation="relax",
     )
     text = (tmp_path / "ds" / "sample_00000" / "pw.in").read_text()
@@ -251,8 +276,10 @@ def test_runner_script_skips_completed_samples(
     tmp_path: Path, pseudo_dir: Path, phase1_config: SystemConfig
 ) -> None:
     write_dataset_inputs(
-        [build_bulk_cu(), build_bulk_cu2o()], tmp_path / "ds",
-        system_config=phase1_config, pseudo_dir=pseudo_dir,
+        [build_bulk_cu(), build_bulk_cu2o()],
+        tmp_path / "ds",
+        system_config=phase1_config,
+        pseudo_dir=pseudo_dir,
     )
     script = (tmp_path / "ds" / "run_all.sh").read_text()
     assert "qe-run" in script
@@ -265,8 +292,10 @@ def test_runner_script_is_executable(
     tmp_path: Path, pseudo_dir: Path, phase1_config: SystemConfig
 ) -> None:
     write_dataset_inputs(
-        [build_bulk_cu()], tmp_path / "ds",
-        system_config=phase1_config, pseudo_dir=pseudo_dir,
+        [build_bulk_cu()],
+        tmp_path / "ds",
+        system_config=phase1_config,
+        pseudo_dir=pseudo_dir,
     )
     script = tmp_path / "ds" / "run_all.sh"
     # Owner execute bit set.
@@ -277,8 +306,10 @@ def test_runner_script_not_written_when_disabled(
     tmp_path: Path, pseudo_dir: Path, phase1_config: SystemConfig
 ) -> None:
     write_dataset_inputs(
-        [build_bulk_cu()], tmp_path / "ds",
-        system_config=phase1_config, pseudo_dir=pseudo_dir,
+        [build_bulk_cu()],
+        tmp_path / "ds",
+        system_config=phase1_config,
+        pseudo_dir=pseudo_dir,
         write_runner_script=False,
     )
     assert not (tmp_path / "ds" / "run_all.sh").exists()
@@ -287,16 +318,17 @@ def test_runner_script_not_written_when_disabled(
 # ---------- read_dataset_outputs ----------------------------------------------
 
 
-def _write_fake_pw_out(path: Path, energy_ry: float = -50.0, with_job_done: bool = True) -> None:
+def _write_fake_pw_out(
+    path: Path, energy_ry: float = -50.0, with_job_done: bool = True
+) -> None:
     """Write a minimal pw.out that parse_pw_output can read.
 
     Note: this isn't a fully-formed QE output (it lacks the geometry block
     that ase.io.read would parse) — it's only used in the manifest-walk
     tests, not the ASE-read path.
     """
-    text = (
-        f"!    total energy              =  {energy_ry:.6f} Ry\n"
-        + ("JOB DONE.\n" if with_job_done else "")
+    text = f"!    total energy              =  {energy_ry:.6f} Ry\n" + (
+        "JOB DONE.\n" if with_job_done else ""
     )
     path.write_text(text)
 
@@ -310,8 +342,10 @@ def test_read_dataset_skips_missing_pw_out(
 ) -> None:
     """A sample with pw.in but no pw.out is silently skipped (the run hasn't happened yet)."""
     write_dataset_inputs(
-        [build_bulk_cu()], tmp_path / "ds",
-        system_config=phase1_config, pseudo_dir=pseudo_dir,
+        [build_bulk_cu()],
+        tmp_path / "ds",
+        system_config=phase1_config,
+        pseudo_dir=pseudo_dir,
     )
     # No pw.out written — read should return empty.
     assert read_dataset_outputs(tmp_path / "ds") == []
@@ -321,8 +355,10 @@ def test_read_dataset_skips_unconverged_when_required(
     tmp_path: Path, pseudo_dir: Path, phase1_config: SystemConfig
 ) -> None:
     write_dataset_inputs(
-        [build_bulk_cu()], tmp_path / "ds",
-        system_config=phase1_config, pseudo_dir=pseudo_dir,
+        [build_bulk_cu()],
+        tmp_path / "ds",
+        system_config=phase1_config,
+        pseudo_dir=pseudo_dir,
     )
     sample = tmp_path / "ds" / "sample_00000"
     # Fake an unconverged output: total energy present, but no JOB DONE.

@@ -37,6 +37,7 @@ from copper_oxide_dft.pourbaix import phase_diagram, plot_diagram
 from copper_oxide_dft.qe_input import (
     DEFAULT_DEGAUSS_RY,
     DEFAULT_ECUTWFC_RY,
+    DEFAULT_HUBBARD_PROJECTOR_TYPE,
     DEFAULT_HUBBARD_U_CU_3D_EV,
     spin_and_hubbard_overrides,
     write_pw_input,
@@ -199,6 +200,19 @@ def bulk_cu(
     show_default=True,
     help="fcc lattice parameter (A) for the bulk Cu structure.",
 )
+@click.option(
+    "--projector-type",
+    type=click.Choice(
+        ["atomic", "ortho-atomic", "norm-atomic", "wf", "pseudo"],
+        case_sensitive=False,
+    ),
+    default=DEFAULT_HUBBARD_PROJECTOR_TYPE,
+    show_default=True,
+    help=(
+        "QE 7.1+ HUBBARD-card projector type. Only consumed when "
+        "--param=hubbard_u; ignored otherwise."
+    ),
+)
 def sweep(
     param: str,
     values: str,
@@ -206,6 +220,7 @@ def sweep(
     pseudo_filename: str,
     pseudo_dir: Path | None,
     lattice_a: float,
+    projector_type: str,
 ) -> None:
     """Generate a convergence-sweep tree of pw.x SCF inputs for bulk Cu."""
     parsed_values: list[float] = [
@@ -219,6 +234,7 @@ def sweep(
         param=param,
         values=parsed_values,
         pseudo_dir=pseudo_dir,
+        projector_type=projector_type,
     )
     for path in written:
         click.echo(f"Wrote {path}")
@@ -426,6 +442,20 @@ def make_slurm(
     show_default=True,
     help="Hubbard U on Cu 3d (eV) applied to oxide bulks.",
 )
+@click.option(
+    "--projector-type",
+    type=click.Choice(
+        ["atomic", "ortho-atomic", "norm-atomic", "wf", "pseudo"],
+        case_sensitive=False,
+    ),
+    default=DEFAULT_HUBBARD_PROJECTOR_TYPE,
+    show_default=True,
+    help=(
+        "QE 7.1+ HUBBARD-card projector type. Default ortho-atomic is "
+        "calibrated against PseudoDojo PAW; atomic projectors fail to "
+        "stabilise AFM CuO at U=4-6 eV (see docs/ground_truths.md)."
+    ),
+)
 def make_pourbaix_inputs(
     root: Path,
     pseudo_dir: Path | None,
@@ -434,6 +464,7 @@ def make_pourbaix_inputs(
     h_pseudo: str,
     ecutwfc: float,
     hubbard_u: float,
+    projector_type: str,
 ) -> None:
     """Generate the QE inputs that feed the Phase 4 Pourbaix analysis.
 
@@ -466,7 +497,10 @@ def make_pourbaix_inputs(
     # --- bulk Cu2O: vc-relax, non-magnetic, DFT+U on Cu 3d ---
     cu2o = build_bulk_cu2o()
     cu2o_ov = spin_and_hubbard_overrides(
-        cu2o, nspin=1, hubbard_u={"Cu": hubbard_u}
+        cu2o,
+        nspin=1,
+        hubbard_u={"Cu": hubbard_u},
+        projector_type=projector_type,
     )
     write_pw_input(
         cu2o,
@@ -488,7 +522,10 @@ def make_pourbaix_inputs(
     # writes them as per-atom starting_magnetization cards. We still need
     # nspin=2 and the Hubbard U via the override helper.
     cuo_ov = spin_and_hubbard_overrides(
-        cuo, nspin=2, hubbard_u={"Cu": hubbard_u}
+        cuo,
+        nspin=2,
+        hubbard_u={"Cu": hubbard_u},
+        projector_type=projector_type,
     )
     write_pw_input(
         cuo,
@@ -576,9 +613,7 @@ def sweep_analyze(root: Path, threshold_mev: float, png_path: Path | None) -> No
         result.points[0] if result.low_value_is_asymptote else result.points[-1]
     )
     asymptote_ev = asymptote_point.energy_per_atom_ev
-    click.echo(
-        f"{'value':>12}  {'E/atom (eV)':>16}  {'ΔE (meV/atom)':>16}  done"
-    )
+    click.echo(f"{'value':>12}  {'E/atom (eV)':>16}  {'ΔE (meV/atom)':>16}  done")
     for point in result.points:
         delta_mev = (point.energy_per_atom_ev - asymptote_ev) * 1.0e3
         click.echo(
@@ -592,9 +627,7 @@ def sweep_analyze(root: Path, threshold_mev: float, png_path: Path | None) -> No
             err=True,
         )
         raise SystemExit(1)
-    click.echo(
-        f"Converged value: {result.param_name} = {result.converged_value:g}"
-    )
+    click.echo(f"Converged value: {result.param_name} = {result.converged_value:g}")
 
     if png_path is not None:
         import matplotlib
