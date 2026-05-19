@@ -249,6 +249,16 @@ def parse_cmd(outputs: tuple[Path, ...], as_json: bool) -> None:
                 "total_energy_ev": result.total_energy_ev,
                 "fermi_energy_ev": result.fermi_energy_ev,
                 "total_magnetization_bohr": result.total_magnetization_bohr,
+                "absolute_magnetization_bohr": result.absolute_magnetization_bohr,
+                "homo_ev": result.homo_ev,
+                "lumo_ev": result.lumo_ev,
+                "band_gap_ev": result.band_gap_ev,
+                "site_magnetizations_bohr": (
+                    list(result.site_magnetizations_bohr)
+                    if result.site_magnetizations_bohr is not None
+                    else None
+                ),
+                "magnetic_ordering": result.magnetic_ordering,
                 "job_done": result.job_done,
             }
         )
@@ -256,12 +266,28 @@ def parse_cmd(outputs: tuple[Path, ...], as_json: bool) -> None:
         click.echo(json.dumps(rows, indent=2))
         return
     for row in rows:
+        gap = (
+            f"{row['band_gap_ev']:.3f} eV"
+            if row["band_gap_ev"] is not None
+            else "metallic-or-N/A"
+        )
+        abs_mag = (
+            f"{row['absolute_magnetization_bohr']:.3f}"
+            if row["absolute_magnetization_bohr"] is not None
+            else "N/A"
+        )
         click.echo(
             f"{row['path']}  E={row['total_energy_ry']:.6f} Ry  "
             f"({row['total_energy_ev']:.4f} eV)  "
-            f"E_F={row['fermi_energy_ev']}  mag={row['total_magnetization_bohr']}  "
+            f"E_F={row['fermi_energy_ev']}  "
+            f"mag={row['total_magnetization_bohr']}  |mag|={abs_mag}  "
+            f"gap={gap}  order={row['magnetic_ordering']}  "
             f"done={row['job_done']}"
         )
+        sites = row["site_magnetizations_bohr"]
+        if sites:
+            preview = "  ".join(f"{m:+.3f}" for m in sites)
+            click.echo(f"    per-site mag (µ_B): {preview}")
 
 
 @main.command("inspect")
