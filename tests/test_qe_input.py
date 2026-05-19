@@ -187,7 +187,7 @@ def test_spin_and_hubbard_overrides_emits_hubbard_card_for_cu2o() -> None:
     assert system["nspin"] == 1
     assert not any(k.startswith("Hubbard_U(") for k in system)
     # The card carries the U on Cu-3d.
-    assert "HUBBARD {atomic}" in overrides.hubbard_card
+    assert "HUBBARD { atomic }" in overrides.hubbard_card
     assert "U Cu-3d 4.000000" in overrides.hubbard_card
 
 
@@ -266,7 +266,7 @@ def test_spin_and_hubbard_overrides_compose_with_write_pw_input(
     # Namelist piece (case-insensitive).
     assert "nspin" in text.lower()
     # Card piece (case-preserving).
-    assert "HUBBARD {atomic}" in text
+    assert "HUBBARD { atomic }" in text
     assert "U Cu-3d 4.000000" in text
     # And the deprecated form must NOT appear — that's exactly what QE 7.1+ rejects.
     assert "hubbard_u(1)" not in text.lower()
@@ -315,7 +315,7 @@ def test_spin_and_hubbard_overrides_projector_type_propagates() -> None:
     overrides = spin_and_hubbard_overrides(
         cu2o, nspin=1, hubbard_u={"Cu": 4.0}, projector_type="ortho-atomic"
     )
-    assert "HUBBARD {ortho-atomic}" in overrides.hubbard_card
+    assert "HUBBARD { ortho-atomic }" in overrides.hubbard_card
 
 
 # ---- write_hp_input --------------------------------------------------------

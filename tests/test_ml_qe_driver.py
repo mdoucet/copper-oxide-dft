@@ -171,7 +171,7 @@ def test_pw_in_for_cu_o_has_spin_and_hubbard(
     text = (tmp_path / "ds" / "sample_00000" / "pw.in").read_text()
     assert "nspin" in text.lower()
     # QE 7.1+ HUBBARD card carries the U on Cu-3d.
-    assert "HUBBARD {atomic}" in text
+    assert "HUBBARD { atomic }" in text
     assert "U Cu-3d" in text
     # Old &SYSTEM Hubbard_U(i) syntax would make QE 7.1+ abort.
     assert "hubbard_u(1)" not in text.lower()

@@ -306,7 +306,10 @@ def _build_hubbard_card(
     if not relevant:
         return ""
 
-    lines = [f"HUBBARD {{{projector_type}}}"]
+    # Documented QE 7.x syntax is `HUBBARD { projector_type }` with spaces
+    # inside the braces. The Fortran parser is whitespace-tolerant, but match
+    # the docs exactly so we never have to debate it again.
+    lines = [f"HUBBARD {{ {projector_type} }}"]
     for label, manifold, u_value in relevant:
         # QE accepts plain decimal; six digits is enough for any U we'd quote.
         lines.append(f"U {label}-{manifold} {u_value:.6f}")
