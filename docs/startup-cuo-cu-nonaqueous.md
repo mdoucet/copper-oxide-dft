@@ -2,155 +2,126 @@
 
 End-to-end workflow for a specific scientific question:
 
-> *How does Cu(111) evolve toward a CuO termination under cathodic polarization
-> (U = −0.8 V) in a non-aqueous electrolyte?*
+> *Why does a copper-oxide overlayer **remain** on a Cu(111) substrate
+> under cathodic polarization (U = −0.8 V vs Ag/AgCl) in a non-aqueous
+> electrolyte (THF + 1 % EtOH)?*
 
-The plan: prototype the workflow on a **DGX Spark (NVIDIA GB10)** workstation,
-then move the converged inputs to **ORNL Frontier** for production.
+The plan: prototype Phases 1–2 (bulk Cu, bulk CuO) and the new MLIP-GCGO
+structural-discovery pipeline on a **DGX Spark (NVIDIA GB10)**
+workstation, then move the predicted top-K candidates to **ORNL
+Frontier** for ESM-FCP reranks at constant U.
 
 ---
 
 ## TL;DR — the path
 
 ```text
-Phase 1  bulk Cu convergence ............... DGX Spark, hours
-Phase 2  bulk CuO + Hubbard U .............. DGX Spark, hours-overnight
-Phase 3  Cu(111) + O adsorbates 1/4→1 ML ... DGX Spark, overnight per coverage
-Phase 5  Non-aqueous Environ (implicit) .... DGX Spark, validation only
-Phase 7  ESM-FCP at U = -0.8 V ............. Frontier production
-Phase 8  CuO/Cu(111) coincident slab ....... Frontier production
+Phase 1  bulk Cu convergence ................. DGX Spark, hours
+Phase 2  bulk CuO + Hubbard U ................ DGX Spark, hours-overnight
+Block C  DFT box-sampling dataset (~5k structs) DGX Spark, days
+Block D  MACE-MP-0 fine-tune + validate ...... DGX Spark, overnight
+Block E  GCGA unbiased + biased μ_O sweeps ... DGX Spark, days
+Block F  Top-K ESM-FCP rerank at U = -0.8 V .. Frontier, days
+Block G  SLD vs neutron-reflectometry ........ DGX Spark, hours
 ```
 
-The repo today ships full scaffolding for Phases 1–7 (CLI + helpers; see
-[implementation-plan.md](implementation-plan.md)). Three pieces of new
-tooling you will write as you go through this guide are flagged with
-**TODO** below — the workflow tells you what they need to do, and the
-test suite tells you what shape they need to take.
+The methodology is locked in [ml-gcgo-pivot.md](ml-gcgo-pivot.md). The
+implementation lives in [`src/copper_oxide_dft/ml/`](../src/copper_oxide_dft/ml/).
+The DGX Spark install path is in [dgx-spark-ml-install.md](dgx-spark-ml-install.md).
+The pre-pivot O-adsorbate ladder lives at the bottom of this document
+([§10](#10-optional-sanity-check--cu111--o-adsorbate-ladder)) as an
+*optional* sanity check, not the production answer.
 
 ---
 
 ## 0. Three deviations from the baseline implementation plan
 
 The repo's [implementation-plan.md](implementation-plan.md) and
-[docs/local-workstation.md](local-workstation.md) assume **aqueous**
-electrochemistry on **Frontier (AMD)** and **Ubuntu CPU** workstations.
-Your workflow differs on three axes. Read this section before any
-calculation.
+[local-workstation.md](local-workstation.md) assume **aqueous**
+electrochemistry, a hand-built O-on-Cu(111) coverage ladder, and
+**Frontier (AMD)** as the production target. Your workflow differs on
+three axes. Read this section before any calculation.
 
 ### 0.1 Non-aqueous electrolyte ⇒ skip the aqueous Pourbaix, change the reference
 
-The Computational Hydrogen Electrode ([che.py](../src/copper_oxide_dft/che.py))
-and the Pourbaix diagram builder ([pourbaix.py](../src/copper_oxide_dft/pourbaix.py))
-reference μ(H₂O) and use pH as an axis. Neither concept applies in
-**THF with 1 % EtOH as proton donor**. You skip Phase 4 entirely and
-go from Phase 3 surface energetics straight to Phase 7 constant-potential
-DFT.
+The CHE machinery ([che.py](../src/copper_oxide_dft/che.py),
+[pourbaix.py](../src/copper_oxide_dft/pourbaix.py)) is hard-coded to
+H₂O as the proton reservoir and uses pH as an axis. Neither concept
+applies in **THF with 1 % EtOH as proton donor**. You skip Phase 4
+entirely and go from Phase 2 bulk-CuO directly into the MLIP-GCGO
+pipeline (Blocks C–G).
 
-The real-system choices for this project (**commit these to
-[ground_truths.md](ground_truths.md)** before doing any calculations):
+The real-system numbers, all committed to
+[ground_truths.md](ground_truths.md) (2026-05-18 entry):
 
 | Quantity | Value | Notes |
 |---|---|---|
-| Solvent | **THF** | ε_static = 7.52 (CRC, 298 K). ~10× weaker screening than water; implicit-solvation shifts will be modest. |
-| Proton donor | **1 % EtOH** | μ(H⁺ + e⁻) reference is EtOH ⇌ EtO⁻ + H⁺, not H₂O. Doesn't affect ESM-FCP at fixed U (we set the Fermi level directly); becomes relevant if you later do CHE-style PCET. |
-| Reference electrode | **Ag/AgCl** | Absolute ≈ **4.64 V vs vacuum** (= 4.44 V SHE + 0.197 V Ag/AgCl-sat-KCl). **Caveat:** in non-aqueous solvents Ag/AgCl is a *pseudo-reference* whose true potential depends on cell construction. The rigorous fix is to calibrate against internal Fc/Fc⁺; the practical answer is to pick one number and use it consistently. |
+| Solvent | **THF** | ε = 7.52 (CRC, 298 K). ~10× weaker screening than water; implicit-solvation shifts will be modest. |
+| Proton donor | **1 % EtOH** | μ(H⁺ + e⁻) reference is EtOH ⇌ EtO⁻ + H⁺. Doesn't affect ESM-FCP at fixed U; matters only for PCET extensions. |
+| Reference electrode | **Ag/AgCl** | Absolute = **4.64 V vs vacuum**. **Caveat:** pseudo-reference in non-aqueous; rigorous fix is calibration against Fc/Fc⁺. |
+| Target potential | **U = −0.8 V vs Ag/AgCl** | μ_e = −(4.64 − 0.8) = **−3.84 eV vs vacuum**. |
 
-The constant-potential helper
-[`fcp_overrides_for_potential`](../src/copper_oxide_dft/qe_input.py)
-exposes `she_absolute_v` as a parameter (the name is historical — it's
-really "absolute potential of *whatever reference you're using*"):
+Every ESM-FCP call passes `she_absolute_v=4.64`:
 
 ```python
+from copper_oxide_dft.qe_input import fcp_overrides_for_potential
 fcp_overrides_for_potential(-0.8, she_absolute_v=4.64)
-# fermi_level_ev_vs_vacuum = -(4.64 + (-0.8)) = -3.84 eV
+# fermi_level_ev_vs_vacuum = -(4.64 - 0.8) = -3.84 eV
 # fcp_mu (Ry)              = -3.84 / 13.6057 = -0.282 Ry
 ```
 
-So at U = −0.8 V vs Ag/AgCl the electron chemical potential sits at
-−3.84 eV vs vacuum. The same U interpreted as vs aqueous SHE would give
-−3.64 eV; the 0.2 V offset is exactly the Ag/AgCl–SHE conversion. If
-you ever quote U vs SHE in a paper, **subtract 0.197 V** from your
-Ag/AgCl readings.
+If you ever quote U vs aqueous SHE in a paper, **subtract 0.197 V**
+from your Ag/AgCl readings.
 
-**If you later calibrate against Fc/Fc⁺** (the rigorous non-aqueous
-practice), the offset is solvent-dependent — in THF it's roughly +0.50
-V from Fc/Fc⁺ to Ag/AgCl (literature varies; Connelly & Geiger, *Chem.
-Rev.* 1996 is the canonical source). Re-derive your `she_absolute_v`
-once the calibration is in hand and update `ground_truths.md`.
+### 0.2 "CuO on Cu" ⇒ MLIP-GCGO structural search, not a hand-built ladder
 
-### 0.2 "CuO on Cu" ⇒ start with O adsorbates, defer the coincident slab
+The earlier draft of this guide modelled "CuO on Cu" with a Cu(111)
+slab carrying ¼ / ½ / ¾ / 1 ML O adsorbates. That hand-built ladder is
+a *proxy*: Cu(111) + 1 ML O has 3-fold adsorbate coordination, real
+CuO has 5-fold coordination. A 4-coverage scan cannot find a
+reconstruction it wasn't seeded with.
 
-`build_cu111_slab` and `build_cuo_111_slab` exist; a **CuO/Cu(111)
-coincident supercell builder does not**. Cu(111) and CuO(111) have a
-~17 % lattice mismatch, so any honest model needs a Diophantine search
-over commensurate `(m×n)` Cu / `(p×q)` CuO cells minimising strain — that
-is Phase 8 territory (reconstruction studies) and a substantial effort
-in its own right.
+The pivot ([ml-gcgo-pivot.md](ml-gcgo-pivot.md)) replaces the ladder
+with a **machine-learned interatomic potential (MACE) + grand-canonical
+genetic algorithm (GCGA)** workflow:
 
-For a meaningful first answer on a few weeks of DGX-Spark time, model the
-CuO/Cu interface as a **Cu(111) slab with increasing chemisorbed-O
-coverage**:
+1. Box-sample perturbed Cu/Cu-O bulk seeds (Block C).
+2. Run those through QE on DGX Spark to build a ~5 k-structure
+   PBE-flavoured training set.
+3. Fine-tune MACE-MP-0 medium on that set (Block D).
+4. Drive a GCGA over μ_O ∈ [−7.0, −6.0] eV on a 12-layer Cu(111)
+   substrate, lateral (4×4), with the fine-tuned MACE as the
+   energy/force evaluator (Block E).
+5. Reduce the resulting ~10 k-phase ensemble to a per-x_O minimum-Ω
+   curve (Block E).
+6. Take the top-K (K ≈ 20) candidates to Frontier, re-relax them under
+   ESM-FCP at U = −0.8 V, and rerank by the constant-U grand potential
+   ``Ω(U) = E_DFT + μ_e · tot_charge`` (Block F).
+7. Convert each ensemble member to a Scattering Length Density (SLD)
+   profile for comparison with the experimental neutron-reflectometry
+   data (Block G).
 
-| Coverage | Surface chemistry | What it represents |
-|---|---|---|
-| 0 ML | clean Cu(111) | Cu under cathodic protection |
-| 1/4 ML O fcc | Cu(111)-O dilute | Onset of oxidation |
-| 1/2 ML O | Cu(111)-O ordered | Pre-Cu₂O surface |
-| 3/4 ML O | Cu(111)-O saturated | Cu₂O-like coordination |
-| 1 ML O | full O monolayer | CuO-like coordination |
+This is more involved than the proxy ladder but it actually answers
+"what wins" rather than "rank these four candidates."
 
-This isn't *the* answer to "how does the surface evolve toward CuO" —
-it's a tractable family of starting structures whose relative free
-energies at U = −0.8 V tell you *which way the system wants to go*. At
-−0.8 V you expect bare Cu to win (cathodic regime should reduce any
-existing oxide); the experiment's reconstruction signal would be a
-relaxed Cu surface, possibly with cation displacement, **not** O
-adsorbates. If your DFT predicts something else, that's the interesting
-result.
-
-**Later** (Phase 8, when you're on Frontier): write the coincident-cell
-builder and re-do the production run with a true CuO/Cu(111) interface.
-
-> **TODO (Phase 8)**: `build_cuo_cu111_coincident_slab(...)`. A search
-> over commensurate `(m,n)` Cu × `(p,q)` CuO cells minimising in-plane
-> strain, followed by stacking the strained CuO slab on top of a fixed
-> Cu(111) base. The test in `tests/test_structure_builder.py` for
-> `build_cu2o_111_slab` is the template; the matching algorithm is the
-> standard Zur-McGill construction (pymatgen has it as
-> `pymatgen.analysis.interfaces.coherent_interfaces` but pulling in
-> pymatgen for one function may not be worth it).
-
-### 0.3 DGX Spark (GB10) ⇒ no SLURM, CUDA-built QE, ARM userland
+### 0.3 DGX Spark (GB10) ⇒ no SLURM, CUDA-built QE, ARM userland; Frontier is rerank-only
 
 GB10 is NVIDIA Grace+Blackwell (ARM CPU + Blackwell GPU, 128 GB unified
 memory), a single workstation rather than a cluster. The repo's
-`make-slurm` command targets ORNL clusters; on GB10 you run `pw.x`
-directly via `mpirun`.
+`make-slurm` command (used in the original Phase-3 ladder workflow)
+still targets Frontier for the ESM-FCP rerank; on DGX Spark you run
+`pw.x` directly via the `qe-run` wrapper.
 
-QE specifics on GB10:
+Two installs are needed:
 
-- The **AMD HIP build** documented in [ground_truths.md](ground_truths.md)
-  does not apply here. You need a **CUDA-aware** QE build.
-- The official QE GPU port targets NVIDIA via NVHPC + CUDA + cuBLAS/cuFFT.
-  Build flags: `./configure --enable-openmp --with-cuda=$NVHPC_ROOT
-  --with-cuda-cc=120 --with-cuda-runtime=12.x` (compute capability `120`
-  is Blackwell — verify against `nvidia-smi --query-gpu=compute_cap`).
-- ARM userland: `apt install quantum-espresso` *may* work on DGX OS for
-  the CPU version but the GPU port wants to be built from source against
-  the NVHPC SDK that NVIDIA ships in the DGX Spark base image.
-- One GB10 superchip has one Blackwell-class GPU; the typical run is
-  `mpirun -n 1 pw.x ...` plus OpenMP threads on the Grace CPU side. You
-  will not parallelise across MPI ranks on a single GB10.
+- **Quantum ESPRESSO with CUDA** (Section 1.3 below): for the box-sampling
+  DFT dataset and the ESM-FCP smoke test.
+- **Python ML stack on top of the existing package** (Section 1.4 below;
+  full details in [dgx-spark-ml-install.md](dgx-spark-ml-install.md)):
+  torch + MACE + dscribe + scikit-learn + UMAP + h5py + GOCIA.
 
-**Section 1 below walks through the install end-to-end.** If you don't
-have CUDA-aware QE working, **everything in this guide reduces to
-CPU-only** — which is workable for Phases 1–2 but slow for Phase 3.
-
-> **TODO**: `SlurmConfig.for_dgx_spark(...)` is not needed (no SLURM),
-> but a small `runs/<system>/run.sh` wrapper that loads the right
-> NVHPC modules and `mpirun`s `pw.x` would help. Not required for the
-> workflow — typing it inline is fine — but a `make-runner` command
-> sibling to `make-slurm` would be a clean future addition.
+Once both work, the GCGA pipeline is `python -c "..."` on the
+workstation.
 
 ---
 
@@ -171,10 +142,10 @@ nvidia-smi            # Blackwell GPU visible, driver loaded
 The DGX OS image typically includes the NVHPC SDK. If not:
 
 ```bash
-sudo apt install -y nvhpc-25-x   # or whatever current major version is in apt
+sudo apt install -y nvhpc-25-x   # or current major
 # Add to ~/.bashrc:
 export NVHPC_ROOT=/opt/nvidia/hpc_sdk/Linux_aarch64/<version>
-export PATH=$NVHPC_ROOT/compilers/bin:$PATH
+export PATH=$NVHPC_ROOT/compilers/bin:$NVHPC_ROOT/comm_libs/mpi/bin:$PATH
 export LD_LIBRARY_PATH=$NVHPC_ROOT/compilers/lib:$LD_LIBRARY_PATH
 nvcc --version
 mpicxx --version       # NVHPC ships its own MPI
@@ -188,25 +159,25 @@ Build from source; the apt package is CPU-only.
 sudo apt install -y libfftw3-dev libopenblas-dev
 git clone https://gitlab.com/QEF/q-e.git
 cd q-e
-git checkout qe-7.3   # or whatever release the QE team currently recommends for GPU
+git checkout qe-7.3   # or current GPU-recommended release
 
 ./configure \
   --enable-openmp \
   --with-cuda=$NVHPC_ROOT/cuda \
   --with-cuda-cc=120 \
-  --with-cuda-runtime=12.6
+  --with-cuda-runtime=12.6   # match nvcc --version
 make -j$(nproc) pw
 
-# Optional but recommended for this project:
+# Optional but recommended:
 make -j$(nproc) hp neb
 
-# Add to PATH:
+# PATH:
 export PATH=$(pwd)/bin:$PATH
 which pw.x
 pw.x --version | head -3
 ```
 
-Verify it actually uses the GPU on a one-atom Cu bulk SCF:
+Verify GPU acceleration is actually wired in:
 
 ```bash
 copper-oxide-dft bulk-cu --out /tmp/smoke/pw.in --ecutwfc 60
@@ -215,18 +186,25 @@ grep -i "gpu" /tmp/smoke/pw.out | head
 # Expect: "GPU acceleration is enabled" or similar.
 ```
 
-If you see GPU lines, you're done. If not, the configure step picked up
-the CPU path — re-do `./configure` with `--with-cuda=...` explicit.
+If you see GPU lines, you're done. If not, re-configure with
+`--with-cuda=...` explicit.
 
-### 1.4 This package
+### 1.4 This package + the ML extras
 
 ```bash
 git clone <your-fork>/copper-oxide-dft.git
 cd copper-oxide-dft
 python -m venv venv && source venv/bin/activate
 pip install -e ".[dev]"
-pytest -q   # expect 165 passed
+pytest -q                 # expect 358 passed, 1 skipped (dscribe/umap path)
+
+# Heavy ML stack — adds torch, MACE, dscribe, sklearn, UMAP, h5py.
+pip install -e ".[ml]"
+pip install git+https://github.com/zhouluo/GOCIA.git
 ```
+
+Full bring-up checklist with smoke tests is in
+[dgx-spark-ml-install.md](dgx-spark-ml-install.md).
 
 ### 1.5 Pseudopotentials
 
@@ -235,31 +213,21 @@ You need **Cu, O, and H** PseudoDojo PBE PAW pseudopotentials.
 ```bash
 mkdir -p ~/pseudos
 # Download Cu.upf, O.upf, H.upf from http://www.pseudo-dojo.org/
-# (PBE, scalar-relativistic, standard accuracy, PAW)
 mv ~/Downloads/{Cu,O,H}.upf ~/pseudos/
-export CUOXDFT_PSEUDO_DIR=~/pseudos
 echo 'export CUOXDFT_PSEUDO_DIR=~/pseudos' >> ~/.bashrc
 ```
 
-### 1.6 A runner script (optional but useful)
-
-To avoid retyping the `mpirun` line:
+### 1.6 The `qe-run` wrapper
 
 ```bash
 mkdir -p ~/bin
 cat > ~/bin/qe-run <<'EOF'
 #!/usr/bin/env bash
-# qe-run <directory> — run pw.x on a pw.in inside <directory>.
-# Uses mpirun if available (and QE_NRANKS > 1); otherwise invokes pw.x
-# directly. For a single-rank run on one GPU, the direct path is
-# functionally equivalent and avoids requiring an MPI install.
 set -euo pipefail
 work_dir="${1:?usage: qe-run <dir>}"
 ranks="${QE_NRANKS:-1}"
 export OMP_NUM_THREADS="${OMP_NUM_THREADS:-4}"
-
 cd "$work_dir"
-
 if [[ "$ranks" -gt 1 ]] && command -v mpirun >/dev/null 2>&1; then
     mpirun -n "$ranks" pw.x -in pw.in > pw.out
 elif command -v mpirun >/dev/null 2>&1; then
@@ -269,32 +237,47 @@ else
 fi
 EOF
 chmod +x ~/bin/qe-run
-# Make sure ~/bin is on PATH:
 case ":$PATH:" in *":$HOME/bin:"*) ;; *) export PATH="$HOME/bin:$PATH" ;; esac
 ```
 
-Then any `qe-run runs/<somewhere>` will run the calculation in that
-directory and capture `pw.out` next to `pw.in`. For multi-rank GPU
-runs (Frontier or a multi-GPU node — not GB10), set
-`QE_NRANKS=8 qe-run runs/...`.
+### 1.7 MACE foundation weights
 
-**Note on MPI on GB10**: the CUDA-aware QE build wires in the NVHPC SDK's
-MPI by default (configure picks it up automatically when `mpicc` is on
-PATH). If `mpirun` is still missing after the build, your NVHPC modules
-aren't loaded — re-do `export PATH=$NVHPC_ROOT/comm_libs/mpi/bin:$PATH`.
-If you genuinely don't need MPI (single rank on one GPU), the wrapper
-above falls back to direct `pw.x` invocation and the workflow still
-works.
+```bash
+mkdir -p ~/models
+cd ~/models
+curl -L -o 2023-12-03-mace-mp-0-medium.model \
+  https://github.com/ACEsuit/mace-mp/releases/download/mace_mp_0/2023-12-03-mace-mp-0-medium.model
+echo "export MACE_MP_0_MEDIUM=$HOME/models/2023-12-03-mace-mp-0-medium.model" >> ~/.bashrc
+```
+
+Smoke-test:
+
+```bash
+python - <<'PY'
+import torch
+from ase.build import molecule
+from mace.calculators import mace_mp
+
+print(f"torch.cuda.is_available() = {torch.cuda.is_available()}")
+atoms = molecule("CO2")
+atoms.calc = mace_mp(model="medium", device="cuda")
+print(f"E(CO2) = {atoms.get_potential_energy():.4f} eV  (foundation-only)")
+PY
+```
+
+`torch.cuda.is_available()` must print `True`. If `False`, your torch
+wheel is CPU-only — see [dgx-spark-ml-install.md §1](dgx-spark-ml-install.md).
 
 ---
 
 ## 2. Phase 1 — Bulk Cu convergence
 
-This is identical to the [Ubuntu walkthrough](local-workstation.md#phase-1--bulk-cu).
-You need it because every subsequent phase needs converged `ecutwfc` and
-k-point density for the Cu valence states.
+Identical to the [Ubuntu walkthrough §Phase 1](local-workstation.md#phase-1--bulk-cu).
+You need it because every subsequent step (Phase 2, Block C dataset
+generation) reads `configs/converged.json:bulk_cu` for `ecutwfc`,
+`kpts`, `degauss`, and `lattice_a_ang`.
 
-### 2.1 Single SCF as a sanity check
+### 2.1 Single SCF sanity check
 
 ```bash
 copper-oxide-dft bulk-cu --out runs/bulk_cu/pw.in
@@ -306,122 +289,110 @@ copper-oxide-dft parse runs/bulk_cu/pw.out
 `parse` should print `done=True` and a total energy. On GB10 with GPU
 acceleration this finishes in seconds.
 
-### 2.2 Convergence sweep
+### 2.2 Convergence sweeps
 
 ```bash
-copper-oxide-dft sweep --param ecutwfc --values 40,60,80,100,120,140 --out runs/conv_ecutwfc
+# ecutwfc
+copper-oxide-dft sweep --param ecutwfc --values 40,60,80,100,120,140 \
+                       --out runs/conv_ecutwfc
 for d in runs/conv_ecutwfc/*/; do qe-run "$d"; done
-
 copper-oxide-dft sweep-analyze runs/conv_ecutwfc \
-  --threshold-mev 1 \
-  --png runs/conv_ecutwfc/convergence.png
+                               --threshold-mev 1 --png runs/conv_ecutwfc/convergence.png
+
+# kpts
+copper-oxide-dft sweep --param kpts --values 10,12,14,16,18,20,24 \
+                       --out runs/conv_kpts
+for d in runs/conv_kpts/*/; do qe-run "$d"; done
+copper-oxide-dft sweep-analyze runs/conv_kpts \
+                               --threshold-mev 1 --png runs/conv_kpts/convergence-kpts.png
+
+# degauss
+copper-oxide-dft sweep --param degauss --values 0.005,0.01,0.02,0.03,0.04,0.05,0.06,0.07 \
+                       --out runs/conv_degauss
+for d in runs/conv_degauss/*/; do qe-run "$d"; done
+copper-oxide-dft sweep-analyze runs/conv_degauss \
+                               --threshold-mev 1 --png runs/conv_degauss/convergence-degauss.png
 ```
 
-Repeat for `kpts` (try 6, 8, 10, 12) and `degauss` (0.01, 0.02, 0.03).
-
-**Lock the converged triplet in two places**:
-
-1. **`configs/converged.json`** via `ProjectConfig` — the machine-readable store every downstream phase reads at runtime:
-
-   ```bash
-   python -c "
-   from copper_oxide_dft.config import ProjectConfig, SystemConfig, save_config
-   cfg = ProjectConfig(systems={
-       'bulk_cu': SystemConfig(
-           ecutwfc_ry=<your-converged-ecutwfc>,
-           kpts=(<n>, <n>, <n>),
-           degauss_ry=<your-converged-degauss>,
-           extras={'convergence_source': 'phase1-sweep <date>'},
-       ),
-   })
-   save_config(cfg, 'configs/converged.json')
-   "
-   ```
-
-2. **[ground_truths.md](ground_truths.md)** — append a dated entry citing the values, the threshold, and the sweep that produced them. The human-readable record for "why these numbers" months from now.
-
-Every Phase ≥ 2 step then loads the JSON instead of hard-coding cutoffs:
+### 2.3 Lock the converged triplet in `configs/converged.json`
 
 ```python
-from copper_oxide_dft.config import load_config
-cfg = load_config("configs/converged.json").systems["bulk_cu"]
-write_pw_input(atoms, out_path=..., ecutwfc=cfg.ecutwfc_ry,
-               kpts=cfg.kpts, degauss=cfg.degauss_ry, ...)
+python -c "
+from copper_oxide_dft.config import ProjectConfig, SystemConfig, save_config
+cfg = ProjectConfig(systems={
+    'bulk_cu': SystemConfig(
+        ecutwfc_ry=<your-converged-ecutwfc>,
+        kpts=(<n>, <n>, <n>),
+        degauss_ry=<your-converged-degauss>,
+        extras={'convergence_source': 'phase1-sweep <date>'},
+    ),
+})
+save_config(cfg, 'configs/converged.json')
+"
 ```
 
-The Phase 1 values committed for this project are documented in [ground_truths.md](ground_truths.md) (search for "Phase 1 converged parameters").
+Phase 1 values committed for this project are documented in
+[ground_truths.md](ground_truths.md) — search for *"Phase 1 converged
+parameters"*.
 
-```bash
-copper-oxide-dft sweep --param kpts --values 10,12,14,16,18,20,24 --out runs/conv_kpts
-for d in runs/conv_kpts/*/;do qe-run "$d"; done
-
-copper-oxide-dft sweep-analyze runs/conv_kpts \
-  --threshold-mev 1 \
-  --png runs/conv_kpts/convergence-kpts.png
-
-copper-oxide-dft sweep --param degauss --values 0.005,0.01,0.02,0.03,0.04,0.05,0.06,0.07 --out runs/conv_degauss
-for d in runs/conv_degauss/*/; do qe-run "$d"; done
-
-copper-oxide-dft sweep-analyze runs/conv_degauss \
-  --threshold-mev 1 \
-  --png runs/conv_degauss/convergence-degauss.png
-```
-
-### 2.3 Lattice parameter (vc-relax)
+### 2.4 Lattice parameter (vc-relax)
 
 ```bash
 copper-oxide-dft bulk-cu --out runs/bulk_cu_vc/pw.in \
-  --calculation vc-relax --ecutwfc <converged>
+                          --calculation vc-relax --ecutwfc <converged>
 qe-run runs/bulk_cu_vc
 grep -A 4 "CELL_PARAMETERS" runs/bulk_cu_vc/pw.out | tail -4
 ```
 
-Compute `a = 2 × min(|cell_vector|)` for the fcc primitive cell. **The
-PBE-relaxed value should land ~1–2 % above experimental 3.615 Å** — PBE
-systematically overestimates transition-metal lattice constants. A
-~1.2 % overshoot (≈ 3.658 Å) is normal. The plan's "<0.5 %" criterion is
-unachievable with pure PBE on Cu and should be read as ">3 % indicates
-a real calculation bug"; see [ground_truths.md](ground_truths.md) entry
-"PBE relaxed lattice parameter for Cu".
+PBE on Cu overshoots experimental `a = 3.615 Å` by ~1.2 % (relaxed
+value lands around 3.658 Å). This is **inside the normal PBE range**;
+the plan's "<0.5 %" criterion is unachievable with pure PBE and should
+be read as ">3 % indicates a calculation bug." See
+[ground_truths.md](ground_truths.md): *"PBE relaxed lattice parameter
+for Cu"*.
 
-**Lock the relaxed value into [configs/converged.json](../configs/converged.json)**:
+Lock the relaxed value:
 
 ```python
+python -c "
 from copper_oxide_dft.config import load_config, save_config
-cfg = load_config("configs/converged.json")
-cfg.systems["bulk_cu"].extras["lattice_a_ang"] = <your-relaxed-a>
-cfg.systems["bulk_cu"].extras["lattice_a_source"] = "PBE vc-relax <date>"
-save_config(cfg, "configs/converged.json")
+cfg = load_config('configs/converged.json')
+cfg.systems['bulk_cu'].extras['lattice_a_ang'] = <your-relaxed-a>
+cfg.systems['bulk_cu'].extras['lattice_a_source'] = 'PBE vc-relax <date>'
+save_config(cfg, 'configs/converged.json')
+"
 ```
 
-Every Phase ≥ 2 step that builds Cu / Cu(111) / Cu-O structures **must**
-read this value, not the experimental 3.615 Å — building slabs on the
-experimental lattice and running PBE on them introduces ~1 %
-compressive strain that biases surface energies (~10 meV/atom level)
-and slightly distorts adsorption sites.
+**Every Block ≥ C step that builds Cu / Cu(111) / Cu-O structures must
+read this value, not the experimental 3.615 Å.**
 
 ---
 
 ## 3. Phase 2 — Bulk CuO + Hubbard U
 
-For your scientific question we only need CuO (the cathodic regime
-shouldn't see Cu₂O), but it costs little to do Cu₂O too and you'll want
-it for context.
+Needed for two reasons:
 
-### 3.1 Generate both oxides
+1. **Hubbard U** value to use in DFT+U for Cu 3d — set in
+   `configs/converged.json` and read everywhere downstream.
+2. **Bulk-CuO seed structure** for the Block C box-sampling step. The
+   GCGA candidates at high x_O should resemble CuO geometrically, and
+   seeding the dataset with CuO ensures MACE sees the right
+   coordination environment.
+
+### 3.1 Generate the oxide bulks
 
 ```bash
 copper-oxide-dft make-pourbaix-inputs runs/oxides \
-  --ecutwfc <converged-from-phase-1> \
-  --hubbard-u 4.0
-# This writes bulk_cu, bulk_cu2o, bulk_cuo, mol_h2, mol_h2o
+                                       --ecutwfc <converged-from-phase-1> \
+                                       --hubbard-u 4.0
+# Writes bulk_cu, bulk_cu2o, bulk_cuo, mol_h2, mol_h2o.
 copper-oxide-dft inspect runs/oxides/bulk_cuo/pw.in
 ```
 
 Look for `starting_magnetization(1)` and `starting_magnetization(2)` on
-the two Cu sub-species in the printed input — AFM CuO needs both, and
-the writer has burned us once before (see [ground_truths.md](ground_truths.md)
-2026-05-14: AFM CuO species splitting).
+the two Cu sub-species — AFM CuO needs both, and the writer has burned
+us once before (see [ground_truths.md](ground_truths.md) 2026-05-14:
+*AFM CuO species splitting*).
 
 ### 3.2 Run the AFM CuO SCF
 
@@ -431,20 +402,18 @@ copper-oxide-dft parse runs/oxides/bulk_cuo/pw.out
 ```
 
 Sanity:
+
 - `job_done=True`
-- `total_magnetization_bohr` near 0 (AFM cancels globally; per-site
-  moments are large but the unit cell sums to zero).
-- Band gap in the output around 1.2–1.7 eV (experimental range).
+- `total_magnetization_bohr` near 0 (AFM cancels globally)
+- Band gap in the output around 1.2–1.7 eV (experimental range)
 
-If the gap is < 0.5 eV or `total_magnetization_bohr` is very nonzero,
-the AFM ordering didn't survive and you're in a wrong local minimum.
-Re-check the per-atom `starting_magnetization` lines in `pw.in` and try
-alternate moment patterns (e.g. AFM-I vs AFM-II) via
-`atoms.set_initial_magnetic_moments(...)` before the writer call.
+If the gap is < 0.5 eV or total magnetization is large, the AFM
+ordering didn't survive — re-check `starting_magnetization` and try
+alternate moment patterns.
 
-### 3.3 Hubbard U sweep (optional but defensible)
+### 3.3 Hubbard U sweep (optional)
 
-If you want to claim a U value rather than cite the literature:
+If you want a defensible U value rather than citing the literature:
 
 ```bash
 python -c "
@@ -459,599 +428,824 @@ sweep_convergence(
 )
 "
 for d in runs/u_sweep_cuo/*/; do qe-run "$d"; done
-
-# Compare band gap to 1.2-1.7 eV experimental range; lock in your U.
 ```
 
-Update [ground_truths.md](ground_truths.md) with the U you chose and why.
+Compare band gap to 1.2–1.7 eV experimental range; lock in your U in
+[ground_truths.md](ground_truths.md) and `configs/converged.json` (use
+`extras['hubbard_u_ev']`). The project default is **4.0 eV**.
 
 ---
 
-## 4. Phase 3 — Cu(111) + O adsorbates (the proxy for "CuO on Cu")
+## 4. Block C — DFT box-sampling ground-truth dataset
 
-This is the most expensive prototype step on GB10. A 4-layer × 3×3
-Cu(111) slab is 36 Cu atoms; adding a few O brings you to ~40-atom
-spin-polarized DFT+U with k-point sampling that's still tractable
-overnight.
+The MACE fine-tune (Block D) needs a diverse set of PBE-flavoured
+labels covering the Cu/Cu-O composition space the GCGA will sweep over.
+This is the most wall-clock-heavy step of the workflow (~5 k QE
+relaxations × tens of minutes each ≈ days on a single GB10).
 
-### 4.1 Clean slab
+### 4.1 Box-sample perturbed structures
 
-Three things this snippet does that the naive form does not:
+```python
+python - <<'PY'
+import numpy as np
+from copper_oxide_dft.ml import BoxSamplingConfig, sample_batch
+from copper_oxide_dft.structure_builder import (
+    build_bulk_cu, build_bulk_cu2o, build_bulk_cuo,
+)
 
-1. Loads the Phase 1 converged parameters and the PBE-relaxed `a` —
-   building the slab on the experimental `a = 3.615 Å` instead of the
-   PBE-relaxed `3.6577 Å` introduces ~1.2 % compressive strain that
-   biases surface energies by ~10 meV/atom.
-2. Disables automatic symmetry detection (`nosym=True`, `noinv=True`).
-   The `FixAtoms` constraint on the bottom 2 layers breaks the slab's
-   inversion symmetry; if QE detects the full symmetry from the
-   starting geometry and then BFGS relaxes only the top, the
-   `checkallsym` watchdog aborts the run with *"some of the original
-   symmetry operations not satisfied"*. Mandatory for any constrained
-   slab relaxation.
-3. Uses `kpts=(6,6,1)` — slab convention: `kz=1` because sampling
-   perpendicular to a slab wastes work. `(6,6)` keeps the same in-plane
-   density as the 18³ bulk k-grid scaled by the 3×3 lateral repeat.
+# Seed bulks. Scale Cu to a small supercell so the post-perturbation cell
+# has room to insert/delete oxygens without becoming pathological.
+seeds = {
+    "Cu":   build_bulk_cu() * (3, 3, 3),       # 27 Cu atoms
+    "Cu2O": build_bulk_cu2o() * (2, 2, 2),     # 32 Cu + 16 O
+    "CuO":  build_bulk_cuo() * (2, 2, 2),      # 32 Cu + 32 O
+}
+
+cfg = BoxSamplingConfig(
+    rattle_stdev_ang=0.2,
+    lattice_scale=0.05,
+    max_o_insertions=8,
+    max_o_deletions=8,
+)
+rng = np.random.default_rng(0)
+
+all_results = []
+seed_labels = []
+for label, seed in seeds.items():
+    # Aim for ~1500 accepted samples per seed → ~4500 total.
+    batch = sample_batch(seed, n_samples=1500, config=cfg, rng=rng,
+                          max_attempts_per_sample=10)
+    all_results.extend(batch)
+    seed_labels.extend([label] * len(batch))
+    accepted = sum(1 for r in batch if r.accepted)
+    print(f"{label:>5}: {accepted}/{len(batch)} accepted")
+
+valid = [(r.atoms, label, r.info) for r, label in zip(all_results, seed_labels)
+         if r.accepted]
+print(f"Total accepted: {len(valid)}")
+PY
+```
+
+Expected acceptance rate: 70–90 %. Lower than that means the Cu-O
+connectivity filter is biting too aggressively — either widen
+`cu_o_connectivity_cutoff_ang` or use larger seed supercells so
+inserted O atoms have more space.
+
+### 4.2 Write the QE inputs
+
+```python
+python - <<'PY'
+import numpy as np
+from copper_oxide_dft.config import load_config
+from copper_oxide_dft.ml import (
+    BoxSamplingConfig, sample_batch, write_dataset_inputs,
+)
+from copper_oxide_dft.structure_builder import (
+    build_bulk_cu, build_bulk_cu2o, build_bulk_cuo,
+)
+
+cu_cfg = load_config("configs/converged.json").systems["bulk_cu"]
+seeds = {
+    "Cu":   build_bulk_cu() * (3, 3, 3),
+    "Cu2O": build_bulk_cu2o() * (2, 2, 2),
+    "CuO":  build_bulk_cuo() * (2, 2, 2),
+}
+
+cfg = BoxSamplingConfig()
+rng = np.random.default_rng(0)
+
+structs, labels, infos = [], [], []
+for label, seed in seeds.items():
+    for r in sample_batch(seed, 1500, cfg, rng):
+        if r.accepted:
+            structs.append(r.atoms)
+            labels.append(label)
+            infos.append(r.info)
+
+entries = write_dataset_inputs(
+    structs,
+    out_root="runs/ml_dataset",
+    system_config=cu_cfg,
+    seed_labels=labels,
+    perturbation_infos=infos,
+    calculation="vc-relax",   # cell + atom positions; bulk box-sampling
+)
+print(f"Wrote {len(entries)} pw.in files under runs/ml_dataset/")
+print(f"Manifest: runs/ml_dataset/manifest.jsonl")
+print(f"Runner:   runs/ml_dataset/run_all.sh")
+PY
+```
+
+What the writer encodes:
+
+- Phase 1 converged `ecutwfc`, `degauss`.
+- Γ-only k-points (perturbed 100+ atom supercells make a finite grid
+  unaffordable; see [ml-gcgo-pivot.md §3.5](ml-gcgo-pivot.md)).
+- `nosym=True`, `noinv=True` (perturbations break the seed cells' space
+  groups; mandatory for any relaxation).
+- Manuscript tolerances: `forc_conv_thr=1e-3 Ry/Bohr`,
+  `conv_thr=1e-6 Ry`, `mixing_beta=0.3`.
+- Spin polarisation + Hubbard U on Cu when O is present in the cell.
+
+### 4.3 Run the batch
+
+```bash
+bash runs/ml_dataset/run_all.sh
+```
+
+The auto-generated `run_all.sh` is **resume-safe**: it skips any sample
+directory whose `pw.out` already contains `JOB DONE`. Re-running it
+after a crash or restart is free.
+
+A 5 000-structure dataset at ~10 min/structure is **~35 days** of
+wall-clock on a single GB10. Two strategies to keep the elapsed time
+reasonable:
+
+- Run fewer samples per seed (e.g. 500 each → ~12 days) and trust the
+  UMAP subsampling in Block C.4 to maintain diversity.
+- Split the seeds across multiple DGX Sparks if you have access to
+  more than one; concatenate the manifests afterwards.
+
+Don't try to run multiple `pw.x` instances concurrently on one
+Blackwell GPU — `pw.x` saturates the GPU during the SCF cycle's dense
+linear algebra; concurrent jobs serialise on the device and you lose
+to context-switch overhead.
+
+### 4.4 Curate the dataset
+
+After the batch finishes, read the outputs back and run the manuscript
+curation pipeline: force-filter → SOAP → IPCA → UMAP → 20×20 grid
+subsample → 10:1 train/test split → extxyz.
+
+```python
+python - <<'PY'
+from copper_oxide_dft.ml import (
+    prepare_dataset, read_dataset_outputs,
+)
+
+items = read_dataset_outputs("runs/ml_dataset", require_job_done=True)
+print(f"Read {len(items)} converged structures.")
+
+split = prepare_dataset(
+    items,
+    train_path="runs/ml_dataset/cuox_train.extxyz",
+    test_path="runs/ml_dataset/cuox_test.extxyz",
+    max_force_ev_per_angstrom=10.0,
+    grid_size=20,
+    train_ratio=10.0 / 11.0,
+    rng_seed=0,
+)
+print(split.summary())
+PY
+```
+
+You want:
+
+- `n_after_force_filter / n_input` ≥ 0.85 (15 % rejection rate is
+  typical; >30 % means perturbations were too aggressive).
+- `n_after_subsample` between 1 000 and 3 000 (smaller → not enough
+  diversity for fine-tuning; much larger → wasted training time).
+- `len(train) / len(test)` ≈ 10.
+
+The extxyz files are ready to feed into MACE.
+
+---
+
+## 5. Block D — Fine-tune MACE-MP-0
+
+### 5.1 Run the fine-tune
+
+```bash
+scripts/finetune_mace.sh \
+    runs/ml_dataset/cuox_train.extxyz \
+    runs/ml_dataset/cuox_test.extxyz \
+    cuox_pbe_finetuned
+```
+
+The script wraps `mace_run_train` with the manuscript hyperparameters:
+50 epochs, batch 4, lr 0.01, AMSGrad, EMA decay 0.99, float32, E0s
+average, energy/forces weighted 1.0 each. Watch the loss curves with
+`tensorboard --logdir checkpoints/cuox_pbe_finetuned/` (MACE writes
+TensorBoard scalars by default).
+
+On Blackwell with a ~2 000-structure curated training set, this is an
+overnight run. CPU-only would take a couple of days; check
+`nvidia-smi` if the wall time looks wrong.
+
+### 5.2 Validate the fine-tuned model
+
+```python
+python - <<'PY'
+from copper_oxide_dft.ml import evaluate_model_on_extxyz
+
+metrics = evaluate_model_on_extxyz(
+    model_path="cuox_pbe_finetuned.model",
+    test_extxyz_path="runs/ml_dataset/cuox_test.extxyz",
+    device="cuda",
+)
+print(metrics.summary())
+print(f"Passes project targets? {metrics.passes_targets()}")
+PY
+```
+
+Project targets ([ml-gcgo-pivot.md §6](ml-gcgo-pivot.md)):
+
+- Energy MAE **< 30 meV/atom** (manuscript reports 9.8 on PBEsol; we're
+  on PBE so 10–20 is expected, 20–30 is acceptable, >30 means
+  pipeline trouble).
+- Force MAE **< 100 meV/Å** (manuscript reports 35.3 on PBEsol).
+
+If the energy MAE refuses to drop below 30:
+
+- Bump `max_num_epochs` to 100 (manuscript ran 50; PBE may need more).
+- Halve the learning rate to `0.005`.
+- Don't touch the optimizer (AMSGrad) or batch size without re-reading
+  the manuscript's ablation tables.
+- Sanity-check the training data: are there pathological frames the
+  force filter missed? Plot the energy histogram per seed; large
+  outliers point at unphysical samples.
+
+Lock the chosen model path in your environment:
+
+```bash
+echo "export CUOXDFT_MACE_MODEL=$PWD/cuox_pbe_finetuned.model" >> ~/.bashrc
+```
+
+---
+
+## 6. Block E — Grand-canonical genetic algorithm
+
+The structural search itself: ~10 k candidate phases produced by
+sweeping the oxygen chemical potential μ_O over a 12-layer Cu(111)
+substrate with the top 6 layers active.
+
+### 6.1 Build the GCGA substrate
+
+```python
+python - <<'PY'
+from copper_oxide_dft.config import load_config
+from copper_oxide_dft.ml import GCGAConfig, build_cu111_gcga_substrate
+
+cu = load_config("configs/converged.json").systems["bulk_cu"]
+slab, active = build_cu111_gcga_substrate(
+    layers=12,
+    lateral=(4, 4),
+    active_top_layers=6,
+    lattice_a_ang=cu.extras["lattice_a_ang"],   # PBE-relaxed a, NOT 3.615
+    vacuum_ang=20.0,
+)
+print(f"Substrate: {len(slab)} atoms, {len(active)} active.")
+PY
+```
+
+The substrate carries a `FixAtoms` constraint on the bottom 6 layers;
+GCGA's mutation routines respect it (only `active` atoms can be moved
+or deleted, and insertions land on top of the active region).
+
+### 6.2 Pin the GOCIA API on first run
+
+The wrapper `copper_oxide_dft.ml.gcga.run_gcga_sweep` deliberately
+raises `NotImplementedError`. The GOCIA package has reshuffled its
+public API across releases; pin it once against the version installed
+in your venv.
+
+```bash
+python -c "import gocia; print(gocia.__version__ if hasattr(gocia, '__version__') else 'src'); help(gocia)" \
+    | head -40
+```
+
+Check which of these import paths actually works and update
+[gcga.py](../src/copper_oxide_dft/ml/gcga.py) `run_gcga_sweep` to call
+the matching API:
+
+- `from gocia.popGen import evolve` (manuscript-era)
+- `from gocia.geneticAlgorithm import run_ga` (newer)
+- something else — read the GOCIA README.
+
+The MACE calculator factory you'll plug in:
+
+```python
+from mace.calculators import MACECalculator
+mace_calc = MACECalculator(model_paths=[model_path], device="cuda")
+
+def evaluate(atoms):
+    atoms.calc = mace_calc
+    e = atoms.get_potential_energy()
+    return biased_grand_potential_ev(e, atoms, config)
+```
+
+The math is already in [gcga.py](../src/copper_oxide_dft/ml/gcga.py)
+(`grand_potential_ev`, `gaussian_bias_ev`, `biased_grand_potential_ev`,
+`compute_x_o`). The substrate and active-index logic are also done.
+Only the GOCIA glue is missing.
+
+### 6.3 Unbiased μ_O sweep
+
+```python
+python - <<'PY'
+import os
+from pathlib import Path
+from copper_oxide_dft.config import load_config
+from copper_oxide_dft.ml import GCGAConfig, build_cu111_gcga_substrate
+from copper_oxide_dft.ml.gcga import (
+    DEFAULT_MU_O_RANGE_EV, DEFAULT_MU_O_N_POINTS, run_gcga_sweep,
+)
+import numpy as np
+
+cu = load_config("configs/converged.json").systems["bulk_cu"]
+slab, active = build_cu111_gcga_substrate(
+    layers=12, lateral=(4, 4), active_top_layers=6,
+    lattice_a_ang=cu.extras["lattice_a_ang"],
+)
+
+model = os.environ["CUOXDFT_MACE_MODEL"]
+mu_o_grid = np.linspace(*DEFAULT_MU_O_RANGE_EV, DEFAULT_MU_O_N_POINTS)
+
+for mu_o in mu_o_grid:
+    out = Path(f"runs/gcga/unbiased/mu_o_{mu_o:+.2f}".replace(".", "p"))
+    cfg = GCGAConfig(
+        substrate=slab, active_indices=active, mu_o_ev=float(mu_o),
+        n_generations=50, population_size=50,
+        bias_centers=(),   # unbiased
+    )
+    print(f"μ_O = {mu_o:+.2f} eV → {out}")
+    run_gcga_sweep(cfg, mace_model_path=model, out_dir=out, device="cuda")
+PY
+```
+
+Each μ_O point runs ~2 500 MACE energy/force evaluations on the GPU
+(50 generations × 50 population). MACE-MP-0 medium on Blackwell does
+~100 inference/s for 200-atom cells, so each μ_O point is ~30 minutes
+of wall time → the full 11-point unbiased sweep is **~6 hours**.
+
+### 6.4 Biased x_O sweep
+
+The unbiased sweep finds the natural minimum-Ω structure at each μ_O,
+but skips over metastable intermediate stoichiometries. The biased
+pass forces dense sampling across x_O ∈ [0.32, 1.0]:
+
+```python
+python - <<'PY'
+import os, numpy as np
+from pathlib import Path
+from copper_oxide_dft.config import load_config
+from copper_oxide_dft.ml import GCGAConfig, build_cu111_gcga_substrate
+from copper_oxide_dft.ml.gcga import (
+    DEFAULT_BIASED_X_O_RANGE, DEFAULT_BIASED_AMPLITUDE_EV,
+    DEFAULT_BIASED_SIGMA, run_gcga_sweep,
+)
+
+cu = load_config("configs/converged.json").systems["bulk_cu"]
+slab, active = build_cu111_gcga_substrate(
+    layers=12, lateral=(4, 4), active_top_layers=6,
+    lattice_a_ang=cu.extras["lattice_a_ang"],
+)
+model = os.environ["CUOXDFT_MACE_MODEL"]
+
+bias_centers = tuple(np.linspace(*DEFAULT_BIASED_X_O_RANGE, 11))   # 11 bumps
+for mu_o in (-6.5,):   # one μ_O is enough for the biased fill-in
+    out = Path(f"runs/gcga/biased/mu_o_{mu_o:+.2f}".replace(".", "p"))
+    cfg = GCGAConfig(
+        substrate=slab, active_indices=active, mu_o_ev=mu_o,
+        n_generations=50, population_size=50,
+        bias_centers=bias_centers,
+        bias_amplitude_ev=DEFAULT_BIASED_AMPLITUDE_EV,
+        bias_sigma=DEFAULT_BIASED_SIGMA,
+    )
+    run_gcga_sweep(cfg, mace_model_path=model, out_dir=out, device="cuda")
+PY
+```
+
+### 6.5 Build the ensemble
+
+```python
+python - <<'PY'
+from pathlib import Path
+from copper_oxide_dft.ml import (
+    Phase, merge_ensembles, per_x_o_minima,
+    read_ensemble_extxyz, write_ensemble_extxyz, top_k_by_omega,
+)
+
+# Each run_gcga_sweep call should write its final population as
+# `<out>/population.extxyz` (this is what your GOCIA pin in §6.2 should
+# produce). Pool them all here.
+runs = list(Path("runs/gcga").rglob("population.extxyz"))
+print(f"Found {len(runs)} GCGA populations.")
+
+ensemble = []
+for p in runs:
+    ensemble.extend(read_ensemble_extxyz(p))
+print(f"Total candidates: {len(ensemble)}")
+
+merged = merge_ensembles(ensemble)
+print(f"After dedup: {len(merged)}")
+
+minima = per_x_o_minima(merged, n_bins=20, x_o_range=(0.0, 1.0))
+print(f"Per-x_O minima (one per bin, may have empty bins): {len(minima)}")
+write_ensemble_extxyz(minima, "runs/gcga/per_x_o_minima.extxyz")
+
+top = top_k_by_omega(minima, k=20)
+write_ensemble_extxyz(top, "runs/gcga/top20.extxyz")
+print(f"Top-20 by Ω written to runs/gcga/top20.extxyz")
+PY
+```
+
+A first look at the result before going to Frontier:
+
+```python
+python - <<'PY'
+import matplotlib.pyplot as plt
+from copper_oxide_dft.ml import read_ensemble_extxyz
+
+minima = read_ensemble_extxyz("runs/gcga/per_x_o_minima.extxyz")
+xs = [p.x_o for p in minima]
+omegas = [p.omega_o_ev for p in minima]
+plt.figure(figsize=(6, 4))
+plt.plot(xs, omegas, "o-")
+plt.xlabel(r"$x_O$"); plt.ylabel(r"$\Omega_O$ (eV)")
+plt.title("GCGA per-$x_O$ minimum-$\\Omega$ curve")
+plt.grid(True); plt.tight_layout()
+plt.savefig("runs/gcga/omega_vs_xo.png", dpi=150)
+PY
+```
+
+Look for:
+
+- A monotonic-ish curve with possible kinks where reconstruction
+  energetics shift.
+- Coverage of x_O = [0, 1] with no large gaps (gaps mean GCGA didn't
+  sample that composition — extend the biased pass).
+- Reasonable per-x_O energies (Ω at x_O ≈ 0.5 should be lower than
+  Ω at x_O = 1.0 if the GCGA is finding real Cu₂O-like minima rather
+  than CuO-like ones, which is what you'd expect from the bulk
+  stability hierarchy).
+
+---
+
+## 7. Block F — Top-K ESM-FCP rerank on Frontier
+
+This is the step that finally answers your scientific question. The
+top-K candidates from §6.5 get re-relaxed at fixed U = −0.8 V vs
+Ag/AgCl, and ranked by the constant-U grand potential.
+
+### 7.1 Generate ESM-FCP inputs
+
+```python
+python - <<'PY'
+from copper_oxide_dft.config import load_config
+from copper_oxide_dft.ml import (
+    prepare_fcp_inputs, read_ensemble_extxyz, write_frontier_submit_scripts,
+)
+
+cu = load_config("configs/converged.json").systems["bulk_cu"]
+top = read_ensemble_extxyz("runs/gcga/top20.extxyz")
+
+paths = prepare_fcp_inputs(
+    candidates=top,
+    out_root="runs/fcp_rerank_minus0p8V",
+    system_config=cu,
+    u_target_v=-0.8,
+    reference_absolute_v=4.64,    # Ag/AgCl absolute
+    hubbard_u_ev=4.0,
+    calculation="relax",          # NOT vc-relax: ESM-FCP wants a fixed cell
+)
+print(f"Wrote {len(paths)} pw.in files.")
+PY
+```
+
+Spot-check one input:
+
+```bash
+copper-oxide-dft inspect runs/fcp_rerank_minus0p8V/candidate_00/pw.in
+grep -E "lfcp|assume_isolated|esm_bc|fcp_mu" runs/fcp_rerank_minus0p8V/candidate_00/pw.in
+# Expect: lfcp=.true., assume_isolated='esm', esm_bc='bc2',
+#         fcp_mu ≈ -0.282 Ry (= -3.84 eV / 13.6057)
+```
+
+### 7.2 Wrap with Frontier SLURM scripts
 
 ```python
 python -c "
-from copper_oxide_dft.config import load_config
-from copper_oxide_dft.structure_builder import build_cu111_slab
-from copper_oxide_dft.qe_input import write_pw_input
-
-cu = load_config('configs/converged.json').systems['bulk_cu']
-slab = build_cu111_slab(
-    layers=4, supercell=(3, 3), vacuum_ang=20.0,
-    a=cu.extras['lattice_a_ang'],
-)
-write_pw_input(
-    slab,
-    out_path='runs/cu111_clean/pw.in',
-    pseudopotentials={'Cu': 'Cu.upf'},
-    calculation='relax',
-    kpts=(6, 6, 1),
-    ecutwfc=cu.ecutwfc_ry,
-    degauss=cu.degauss_ry,
-    extra_input_data={'system': {'nosym': True, 'noinv': True}},
+from copper_oxide_dft.ml import write_frontier_submit_scripts
+write_frontier_submit_scripts(
+    out_root='runs/fcp_rerank_minus0p8V',
+    account='<YOUR_PROJECT_ID>',
+    walltime='4:00:00',
+    qe_module='quantum-espresso/<version>-gpu',
 )
 "
-copper-oxide-dft inspect runs/cu111_clean/pw.in   # 4 layers of 9 Cu
-qe-run runs/cu111_clean
 ```
 
-`nosym=True` makes the run ~6-8× more expensive at the k-point sum
-than the symmetry-reduced version, but on a constrained slab there's
-no honest alternative — the constraint genuinely breaks the symmetry.
-See [ground_truths.md](ground_truths.md) entry "Slab relaxations need
-nosym=True".
+Each `candidate_NN/submit.sh` runs `srun --gpus-per-task=1
+--gpu-bind=closest pw.x ...` on Frontier's 8-GCD-per-node config.
 
-### 4.1.5 Verify the clean-slab run
-
-Five checks in order from cheapest to most informative. Anything that
-fails sends you back to the input rather than forward to §4.2.
-
-**(1) Did it finish and converge?**
+### 7.3 Ship + submit + retrieve
 
 ```bash
-copper-oxide-dft parse runs/cu111_clean/pw.out
-grep -c "JOB DONE" runs/cu111_clean/pw.out             # expect: 1
-grep -E "bfgs converged|convergence NOT|incomplete" runs/cu111_clean/pw.out | tail
+# Ship.
+rsync -av runs/fcp_rerank_minus0p8V/ frontier:scratch/fcp_rerank/
+rsync -av ~/pseudos/ frontier:scratch/pseudos/   # first time only
+
+# Submit on Frontier.
+ssh frontier
+echo "export CUOXDFT_PSEUDO_DIR=/lustre/.../pseudos" >> ~/.bashrc
+for d in /lustre/.../scratch/fcp_rerank/candidate_*/; do
+    (cd "$d" && sbatch submit.sh)
+done
+
+# Wait — these are ~hours per candidate; ESM-FCP convergence is the
+# slowest part of the whole pipeline. Monitor:
+squeue -u $USER
+
+# Pull back when done.
+exit   # back to DGX Spark
+rsync -av frontier:/lustre/.../scratch/fcp_rerank/ runs/fcp_rerank_minus0p8V/
 ```
 
-`parse` should report `done=True`, a total energy around
-−5160 × 36 ≈ −186 000 eV, and `mag=None` (clean Cu is non-magnetic — a
-finite total magnetization means something went sideways). Absence of
-`bfgs converged` near the end means the BFGS optimizer didn't reach
-the force threshold.
+### 7.4 Verify the `tot_charge` regex against a real Frontier output
 
-**(2) Force and energy trajectory** — confirm the optimization actually
-descended:
+The constant-U Ω depends on `tot_charge` parsed from `pw.out`. The
+default regex in
+[fcp_rerank.py](../src/copper_oxide_dft/ml/fcp_rerank.py) takes the
+*last* standalone `tot_charge = ...` line in the output. **This
+heuristic must be verified on a real Frontier ESM-FCP run before you
+trust the ranking.**
 
 ```bash
-grep -E "Total force|^!" runs/cu111_clean/pw.out | tail -30
+# Look at where `tot_charge` appears in one finished pw.out:
+grep -n "tot_charge" runs/fcp_rerank_minus0p8V/candidate_00/pw.out
 ```
 
-Total force should drop monotonically toward ~10⁻³ Ry/Bohr; total
-energy should decrease and plateau. Oscillating force without settling
-means BFGS is stuck (usually too-large initial step or a constraint
-fighting the gradient).
+You expect to see:
 
-**(3) Layer spacings** — the most informative geometric check:
+- One occurrence in the input namelist echo near the top of the file
+  (input `tot_charge` is whatever QE was started with; usually 0.0).
+- N occurrences in the FCP iteration block as the loop converges.
+- A final value that matches the converged FCP charge.
+
+The regex's "last occurrence" heuristic picks the last of those, which
+should be the converged one. If your QE version prints the converged
+value *before* a final per-iteration trace line, the heuristic picks
+the wrong number — tighten the regex to anchor on the FCP block
+specifically.
+
+### 7.5 Rank the candidates
 
 ```python
-python <<'PY'
-from copper_oxide_dft.structure_builder import summarize_layers
-from ase.io.espresso import read_espresso_out
-import numpy as np
+python - <<'PY'
+from copper_oxide_dft.ml import rank_fcp_results
 
-trajs = list(read_espresso_out("runs/cu111_clean/pw.out", index=slice(None)))
-final = trajs[-1]
-print(f"Atoms: {len(final)}  (expect 36 for 4-layer 3x3 slab)")
-
-layers = summarize_layers(final, tol=0.3)
-print(f"\nLayers (top down):")
-zs = [L.z for L in reversed(layers)]
-for i, L in enumerate(reversed(layers)):
-    print(f"  L{i}: z = {L.z:7.3f} A  ({L.composition_label()}, {L.total_atoms} atoms)")
-
-a_bulk = 3.6577     # PBE-relaxed
-d111_bulk = a_bulk * np.sqrt(3) / 3
-print(f"\nInterlayer spacings (A):  bulk d111 = {d111_bulk:.3f}")
-for i in range(len(zs) - 1):
-    d = zs[i] - zs[i + 1]
-    pct = (d - d111_bulk) / d111_bulk * 100
-    print(f"  d{i}-{i+1} = {d:.3f}  ({pct:+.1f}% vs bulk)")
+results = rank_fcp_results(
+    out_root="runs/fcp_rerank_minus0p8V",
+    u_target_v=-0.8,
+    reference_absolute_v=4.64,
+)
+print(f"{'candidate':<14}{'E (eV)':>14}{'tot_charge':>14}{'Ω(U) (eV)':>14}")
+print("-" * 56)
+for r in results:
+    q = f"{r.tot_charge:+.3f}" if r.tot_charge is not None else "  N/A"
+    o = f"{r.omega_u_ev:+.4f}" if r.omega_u_ev is not None else "    N/A"
+    print(f"{r.candidate_id:<14}{r.energy_ev:>+14.4f}{q:>14}{o:>14}")
 PY
 ```
 
-**What "good" looks like**:
+The candidate at the top of the table is the predicted surface state
+at U = −0.8 V vs Ag/AgCl.
 
-- 36 atoms (4 layers × 9 atoms for 3×3).
-- Top-layer spacing `d_01` contracts by ~1–2 % vs bulk d₁₁₁ — the
-  canonical relaxation signature for fcc(111).
-- `d_12` essentially at bulk; `d_23` exactly at bulk (the FixAtoms
-  constraint pins layers 1–2 from the bottom).
-- No mixed layers (no Cu sitting at a non-physical z).
+### 7.6 What the answer means
 
-A top-layer *expansion* is a rare PBE failure mode for Cu(111); usually
-indicates an under-relaxed top layer or too-coarse k-points.
+Three possible outcomes:
 
-**(4) Inputs that were actually used** — useful if you didn't paste the
-§4.1 snippet exactly:
+1. **A CuO-like coverage (x_O ≈ 0.5) wins thermodynamically.** Then
+   "remains" is a thermodynamic statement — CuO is the predicted
+   ground state at U = −0.8 V in non-aqueous, and the experimental
+   observation is explained.
+2. **A Cu-rich coverage (x_O ≪ 0.5) wins thermodynamically.** Then
+   the answer is *kinetic*, not thermodynamic — CuO is metastable, and
+   what stabilises it on the experimental timescale is a barrier to
+   reduction. Next step: run NEB ([neb.py](../src/copper_oxide_dft/neb.py))
+   from the experimental CuO terminus to the predicted Cu-like ground
+   state and look at the activation energy.
+3. **An intermediate suboxide (x_O ≈ 0.2–0.4) wins.** This is the most
+   interesting outcome — it means the GCGA found a phase the
+   experimental Pourbaix doesn't predict, and the next step is to
+   characterise it structurally (cation arrangement, layer thickness)
+   and check if the NR data could plausibly be re-fit as that phase.
 
-```bash
-grep -E "ecutwfc|degauss|nspin|K_POINTS" runs/cu111_clean/pw.in | head
-head -5 runs/cu111_clean/pw.in   # check pseudo_dir resolves to your pseudos
-```
+---
 
-The in-plane lattice vector length should be `3 × a/√2 ≈ 7.76 Å` for the
-PBE-relaxed `a = 3.6577 Å`. If you see `~7.67 Å`, the slab was built on
-the experimental lattice — re-build with the config-loaded `a` and
-re-run.
+## 8. Block G — SLD comparison to neutron reflectometry
 
-**(5) Surface energy** — the science check:
+The final, falsifiable step: convert each top-K candidate to a
+neutron-reflectometry Scattering Length Density profile and overlay
+the experimental NR data.
+
+### 8.1 SLD of the predicted winner
 
 ```python
-python <<'PY'
-from copper_oxide_dft.parse import parse_pw_output
-from copper_oxide_dft.structure_builder import surface_energy_ev_per_a2
-import numpy as np
+python - <<'PY'
+from copper_oxide_dft.ml import (
+    bulk_cu_normalization_factor,
+    compute_sld_profile,
+    rank_fcp_results,
+)
 
-slab = parse_pw_output("runs/cu111_clean/pw.out").total_energy_ev
-bulk = parse_pw_output("runs/bulk_cu_vc/pw.out").total_energy_ev   # 1 atom/cell
+# Pull the FCP-converged geometries (rank_fcp_results carries each
+# candidate's relaxed structure via the `atoms` field).
+results = rank_fcp_results("runs/fcp_rerank_minus0p8V", u_target_v=-0.8)
+winner = results[0]
+print(f"Winner: {winner.candidate_id}  Ω(U) = {winner.omega_u_ev:+.4f} eV")
 
-a = 3.6577
-A_prim = (a / np.sqrt(2))**2 * np.sin(np.deg2rad(60))
-A_slab = A_prim * 9     # 3x3 lateral
+# Lattice-correction factor for our PBE-overshoot.
+norm = bulk_cu_normalization_factor(simulated_a_ang=3.6577)
 
-gamma = surface_energy_ev_per_a2(slab, bulk, 36, A_slab, n_surfaces=2)
-print(f"gamma = {gamma:.4f} eV/A^2  =  {gamma * 16.0218:.3f} J/m^2")
-print(f"Literature Cu(111): ~0.08 eV/A^2 (~1.3 J/m^2)")
+profile = compute_sld_profile(winner.atoms, bin_width_ang=1.0)
+# Apply the manuscript's bulk-Cu normalisation.
+profile_sld_e6 = profile.sld_e6_per_a2 * norm
 PY
 ```
 
-**Hit ranges**: published DFT γ for Cu(111) is **1.28–1.41 J/m²** (PBE
-undershoots vs experimental 1.79 J/m² — typical for transition metals).
-**0.06–0.10 eV/Å² (1.0–1.6 J/m²) ⇒ you're good to proceed to §4.2.**
-
-If γ falls outside that range, the prime suspects in order:
-
-1. Slab was built on the experimental `a` instead of the relaxed value
-   (see check 4 above). The strain biases γ at the ~10 meV/atom level.
-2. `n_surfaces` is wrong: use 2 for symmetric slab, 1 if dipole
-   correction is on.
-3. BFGS didn't actually converge (see check 1).
-4. The bulk reference (`runs/bulk_cu_vc/pw.out`) used different cutoffs
-   than the slab. Re-check that both runs sourced the same
-   `configs/converged.json` values.
-
-### 4.2 O-covered slabs at 1/4, 1/2, 3/4, 1 ML
-
-A small Python driver since this isn't a CLI command yet:
+### 8.2 Overlay against the experimental NR data
 
 ```python
-python -c "
+python - <<'PY'
+import matplotlib.pyplot as plt
+import numpy as np
+
+# Load your experimental SLD profile (whatever format your NR fitter
+# spits out; here we assume a two-column z[Å], SLD[10⁻⁶ Å⁻²] CSV).
+exp = np.loadtxt("experimental_nr.csv", delimiter=",")
+plt.plot(exp[:, 0], exp[:, 1], "k-", label="Experiment (NR)")
+
+# Top-3 predictions for visual context.
+from copper_oxide_dft.ml import (
+    compute_sld_profile, bulk_cu_normalization_factor, rank_fcp_results,
+)
+results = rank_fcp_results("runs/fcp_rerank_minus0p8V", u_target_v=-0.8)
+norm = bulk_cu_normalization_factor(simulated_a_ang=3.6577)
+for r in results[:3]:
+    if r.atoms is None: continue
+    prof = compute_sld_profile(r.atoms, bin_width_ang=1.0)
+    plt.plot(prof.z_centres_ang, prof.sld_e6_per_a2 * norm,
+             label=f"{r.candidate_id}  Ω={r.omega_u_ev:+.3f} eV")
+plt.xlabel("z (Å)"); plt.ylabel("SLD (10⁻⁶ Å⁻²)")
+plt.legend(); plt.tight_layout()
+plt.savefig("runs/results/sld_overlay.png", dpi=200)
+PY
+```
+
+What "good" looks like:
+
+- Bulk-Cu region of all three profiles overlaps the experimental Cu
+  SLD baseline (~6.5 × 10⁻⁶ Å⁻²). If it doesn't, your normalisation
+  factor is wrong — re-check `simulated_a_ang`.
+- The oxide-layer region (high-z) shows the SLD dropping below the Cu
+  baseline (oxygen has a lower scattering length than Cu) at a depth
+  consistent with what the experiment sees.
+- The winner's profile is a better match than the runners-up.
+
+---
+
+## 9. What "good" looks like end-to-end
+
+By the time you've worked through this guide:
+
+- ✅ Phase 1 converged `ecutwfc` / kpts / degauss / `a` for Cu in
+  `configs/converged.json`.
+- ✅ Phase 2 Hubbard U on Cu 3d locked in `configs/converged.json` and
+  documented in [ground_truths.md](ground_truths.md).
+- ✅ Box-sampling DFT dataset of ~3 000–5 000 PBE-relaxed structures
+  in `runs/ml_dataset/`.
+- ✅ Fine-tuned MACE model with energy MAE < 30 meV/atom and force MAE
+  < 100 meV/Å on the 1/11 hold-out.
+- ✅ GCGA ensemble covering x_O ∈ [0, 1] with per-x_O minimum-Ω
+  candidates in `runs/gcga/per_x_o_minima.extxyz`.
+- ✅ Top-20 ESM-FCP-converged candidates at U = −0.8 V in
+  `runs/fcp_rerank_minus0p8V/`.
+- ✅ A single predicted winner with `Ω(U)` reported alongside the
+  runners-up.
+- ✅ SLD profile of the winner overlaid on the experimental NR data
+  in `runs/results/sld_overlay.png`.
+- ✅ A defensible answer to "why does CuO remain at U = −0.8 V?":
+  thermodynamic, kinetic, or a previously-unsuspected suboxide.
+
+---
+
+## 10. Optional sanity-check — Cu(111) + O-adsorbate ladder
+
+The pre-pivot proxy still exists in-tree as a sanity check. Don't run
+it as your production answer (see [§0.2](#02-cuo-on-cu--mlip-gcgo-structural-search-not-a-hand-built-ladder)
+for why) — but it's a cheap way to confirm your Phase 1/2 setup
+produces sensible numbers before committing days to the GCGA pipeline.
+
+```python
+python - <<'PY'
 from copper_oxide_dft.config import load_config
-from copper_oxide_dft.qe_input import write_pw_input, spin_and_hubbard_overrides
-from copper_oxide_dft.structure_builder import build_cu111_slab, add_oxygen_adsorbates
+from copper_oxide_dft.qe_input import (
+    DEFAULT_PSEUDOPOTENTIALS, merge_namelist_overrides,
+    spin_and_hubbard_overrides, write_pw_input,
+)
+from copper_oxide_dft.structure_builder import (
+    add_oxygen_adsorbates, build_cu111_slab,
+)
 
-cu = load_config('configs/converged.json').systems['bulk_cu']
-U_CU = 4.0                     # or your Phase 2 result
-
+cu = load_config("configs/converged.json").systems["bulk_cu"]
 for coverage in (1/4, 1/2, 3/4, 1.0):
     slab = build_cu111_slab(layers=4, supercell=(3, 3), vacuum_ang=20.0,
-                            a=cu.extras['lattice_a_ang'])
-    covered = add_oxygen_adsorbates(slab, coverage_ml=coverage, site='fcc')
-    label = f'{int(coverage * 100):03d}'
+                             a=cu.extras["lattice_a_ang"])
+    covered = add_oxygen_adsorbates(slab, coverage_ml=coverage, site="fcc")
+    label = f"{int(coverage * 100):03d}"
 
-    # Merge the spin+U override with nosym (constrained slab, see 4.1).
-    overrides = spin_and_hubbard_overrides(
-        covered, nspin=2, hubbard_u={'Cu': U_CU}
+    overrides = merge_namelist_overrides(
+        spin_and_hubbard_overrides(covered, nspin=2, hubbard_u={"Cu": 4.0}),
+        {"system": {"nosym": True, "noinv": True}},
     )
-    overrides.setdefault('system', {}).update({'nosym': True, 'noinv': True})
-
     write_pw_input(
         covered,
-        out_path=f'runs/cu111_O_{label}ML/pw.in',
-        pseudopotentials={'Cu': 'Cu.upf', 'O': 'O.upf'},
-        calculation='relax',
+        out_path=f"runs/proxy_cu111_O_{label}ML/pw.in",
+        pseudopotentials=DEFAULT_PSEUDOPOTENTIALS,
+        calculation="relax",
         kpts=(6, 6, 1),
         ecutwfc=cu.ecutwfc_ry,
         degauss=cu.degauss_ry,
         extra_input_data=overrides,
     )
-"
+PY
 
-for d in runs/cu111_O_*/; do
-    copper-oxide-dft inspect "$d/pw.in"   # eyeball the geometry
-done
+for d in runs/proxy_cu111_O_*/; do qe-run "$d"; done
 ```
 
-Then run them. They're overnight calculations per coverage on GB10
-unless you have unusually fast convergence; expect 4–8 hours each.
-
-```bash
-for d in runs/cu111_O_*/; do qe-run "$d"; done
-```
-
-### 4.3 Surface energies and adsorption energies (in vacuum)
-
-After the runs finish, compute the differential O adsorption energy for
-each coverage:
-
-```python
-python -c "
-from copper_oxide_dft.parse import parse_pw_output
-
-E_clean = parse_pw_output('runs/cu111_clean/pw.out').total_energy_ev
-E_O2_per_atom = parse_pw_output('runs/oxides/bulk_cuo/pw.out').total_energy_ev  # rough
-# (better: run a true O2 reference; build_reference_o2 handles the triplet)
-
-for label, coverage, n_o in [('025', 0.25, 2),  # 2 atoms in a 3x3 = 2/9 ≈ 1/4 ML
-                              ('050', 0.5, 4),
-                              ('075', 0.75, 7),
-                              ('100', 1.0, 9)]:
-    E_cov = parse_pw_output(f'runs/cu111_O_{label}ML/pw.out').total_energy_ev
-    dE = (E_cov - E_clean - n_o * (E_O2_per_atom / 2)) / n_o
-    print(f'{label} ML: ΔE_ads(O) = {dE:+.3f} eV / O atom')
-"
-```
-
-Sanity: dilute coverage should give the most negative (strongest)
-adsorption energy; the literature value for 1/4 ML O on Cu(111) is
-around −4.5 to −5 eV vs. ½O₂. If your number is way off, suspect (in
-order) wrong O₂ reference, wrong spin treatment, unconverged cutoffs.
-
-These vacuum surface energetics are the **input** to Phase 7 — at
-constant potential, ΔE(coverage) translates to ΔG(U, coverage), and the
-lowest-G state is what the surface relaxes toward.
+Expected adsorption energy for ¼ ML O on Cu(111): around −4.5 to −5 eV
+vs ½O₂. If your number is way off in the proxy, suspect (in order):
+wrong O₂ reference, wrong spin treatment, unconverged cutoffs. If the
+proxy looks reasonable, your Phase 1/2 is on solid ground and the
+GCGA pipeline will inherit those numbers correctly.
 
 ---
 
-## 5. Phase 5 — Non-aqueous implicit solvation (validation on DGX Spark)
+## 11. Pitfalls specific to this workflow
 
-If the Environ-patched QE build is available on your DGX Spark
-installation, you can include implicit solvent at the implicit (mean-field)
-level. If not — and this is likely on a fresh GB10 install — Environ is
-an optional refinement and you can move to Phase 7 in vacuum. Both
-paths are documented below.
-
-### 5.1 Generate the environ.in for THF
-
-The Environ writer in this repo defaults to water (ε = 78.36). Override
-for THF:
-
-```python
-python -c "
-from copper_oxide_dft.environ import write_environ_input
-
-# THF: ε = 7.52 at 298 K (CRC handbook).
-# 1 % EtOH adds <0.1 to ε; ignored at the implicit-solvent level.
-write_environ_input(
-    'runs/cu111_O_025ML/environ.in',
-    environ_type='input',          # NOT 'water' — we override the value
-    static_permittivity=7.52,
-)
-"
-cat runs/cu111_O_025ML/environ.in
-```
-
-> **Note**: passing `environ_type='input'` is the Environ convention for
-> "use the supplied numbers rather than a named preset." If you stay
-> with `environ_type='water'` while overriding `static_permittivity`,
-> Environ silently keeps its built-in water parameters and you've lied
-> to it about the solvent. Verify against your Environ version's docs.
-
-> **Why THF matters less than water did**: with ε = 7.52, the implicit
-> solvent screens a charged surface roughly 10× less than water does.
-> The energetic shifts between vacuum and implicit-THF will be small —
-> the *order* of stable coverages at U = −0.8 V is unlikely to change.
-> Implicit solvation here is more about being correct than about
-> changing the answer. If you want the EtOH proton donor to actually
-> matter (e.g. for PCET steps), you need explicit EtOH molecules
-> (Phase 6 territory), not implicit solvent.
-
-### 5.2 Check whether your QE is Environ-patched
-
-```bash
-pw.x --help 2>&1 | grep -i environ
-# Or: try to run a vacuum case with a benign environ.in next to pw.in.
-# Patched pw.x parses both files; stock pw.x ignores environ.in silently.
-```
-
-If unpatched, building Environ-patched QE on ARM/CUDA from scratch is a
-half-day exercise; postpone until Frontier or do it once and document.
-
-### 5.3 Re-run one O-covered slab with implicit solvent
-
-```bash
-cp runs/cu111_O_025ML/pw.in     runs/cu111_O_025ML_solv/pw.in
-cp runs/cu111_O_025ML/environ.in runs/cu111_O_025ML_solv/environ.in   # if you wrote one
-qe-run runs/cu111_O_025ML_solv
-diff <(grep "^!    total energy" runs/cu111_O_025ML/pw.out | tail -1) \
-     <(grep "^!    total energy" runs/cu111_O_025ML_solv/pw.out | tail -1)
-```
-
-Expect the solvent run to shift the total energy by a fraction of an eV;
-the sign and magnitude depend on how polar the surface is.
-
----
-
-## 6. Phase 7 — ESM-FCP at U = −0.8 V
-
-This is the answer to your scientific question: at fixed U = −0.8 V vs.
-your chosen reference electrode, how does the surface evolve?
-
-The expensive Phase-7 calculations belong on Frontier (Section 7).
-Validate the input file *generation* and a short SCF on DGX Spark
-first.
-
-### 6.1 Verify QE on DGX Spark accepts `lfcp`
-
-```bash
-python -c "
-from copper_oxide_dft.qe_input import (
-    fcp_overrides_for_potential, spin_and_hubbard_overrides, write_pw_input,
-)
-from copper_oxide_dft.structure_builder import build_cu111_slab
-
-slab = build_cu111_slab(layers=4, supercell=(2, 2), vacuum_ang=20.0)
-fcp = fcp_overrides_for_potential(-0.8, she_absolute_v=4.64)   # Ag/AgCl
-spin = spin_and_hubbard_overrides(slab, nspin=1)
-merged = {}
-for src in (fcp, spin):
-    for nm, entries in src.items():
-        merged.setdefault(nm, {}).update(entries)
-write_pw_input(
-    slab, out_path='runs/cu111_fcp_smoke/pw.in',
-    pseudopotentials={'Cu': 'Cu.upf'},
-    calculation='scf', kpts=(6, 6, 1),
-    extra_input_data=merged,
-)
-"
-grep -E 'lfcp|assume_isolated|esm_bc|fcp_mu' runs/cu111_fcp_smoke/pw.in
-# Expect lfcp=.true., assume_isolated='esm', esm_bc='bc2', fcp_mu ≈ -0.282 Ry
-```
-
-Run a single SCF iteration to confirm parsing:
-
-```bash
-qe-run runs/cu111_fcp_smoke
-head -50 runs/cu111_fcp_smoke/pw.out | grep -i -E 'esm|fcp'
-```
-
-If you see `Effective Screening Medium method` and `Fictitious Charge`
-lines, QE accepted ESM-FCP. If the run errors at `lfcp` or
-`assume_isolated`, your QE build is too old — rebuild from a recent
-release (≥ qe-7.2).
-
-### 6.2 Generate the full coverage × potential matrix (input only)
-
-You need ESM-FCP-converged runs at U = −0.8 V for at least clean Cu(111)
-plus the O-coverage series from Phase 3. The same Python pattern as
-Section 4.2:
-
-```python
-python -c "
-from copper_oxide_dft.qe_input import (
-    fcp_overrides_for_potential, spin_and_hubbard_overrides, write_pw_input,
-)
-from copper_oxide_dft.structure_builder import build_cu111_slab, add_oxygen_adsorbates
-
-ECUTWFC = <converged>
-U_CU = 4.0
-U_TARGET = -0.8
-V_ABS = 4.64   # Ag/AgCl (= SHE 4.44 + Ag/AgCl-vs-SHE 0.197).
-
-bases = [
-    ('clean', lambda s: s),
-    ('O_025ML', lambda s: add_oxygen_adsorbates(s, coverage_ml=0.25, site='fcc')),
-    ('O_050ML', lambda s: add_oxygen_adsorbates(s, coverage_ml=0.5, site='fcc')),
-    ('O_075ML', lambda s: add_oxygen_adsorbates(s, coverage_ml=0.75, site='fcc')),
-    ('O_100ML', lambda s: add_oxygen_adsorbates(s, coverage_ml=1.0, site='fcc')),
-]
-
-for label, modify in bases:
-    slab = modify(build_cu111_slab(layers=4, supercell=(3, 3), vacuum_ang=20.0))
-    fcp = fcp_overrides_for_potential(U_TARGET, she_absolute_v=V_ABS)
-    spin = spin_and_hubbard_overrides(slab, nspin=2, hubbard_u={'Cu': U_CU})
-    merged = {}
-    for src in (fcp, spin):
-        for nm, entries in src.items():
-            merged.setdefault(nm, {}).update(entries)
-    write_pw_input(
-        slab,
-        out_path=f'runs/fcp_minus0p8V/{label}/pw.in',
-        pseudopotentials={'Cu': 'Cu.upf', 'O': 'O.upf'},
-        calculation='relax', kpts=(6, 6, 1),
-        ecutwfc=ECUTWFC,
-        extra_input_data=merged,
-    )
-"
-for d in runs/fcp_minus0p8V/*/; do copper-oxide-dft inspect "$d/pw.in"; done
-```
-
-### 6.3 Don't run the full matrix on DGX Spark
-
-A 36-Cu + adsorbate slab with ESM-FCP + DFT+U + spin polarization will
-take many hours per relaxation step on GB10. Validate inputs locally;
-run on Frontier.
-
----
-
-## 7. Ship to Frontier
-
-Once Phases 1–3 are converged and the Phase-7 inputs look right:
-
-```bash
-# 1. Wrap each pw.in with a SLURM script targeting Frontier.
-copper-oxide-dft make-slurm runs/fcp_minus0p8V \
-  --account <YOUR_PROJECT> \
-  --walltime 2:00:00 \
-  --qe-module quantum-espresso/<version>-gpu
-
-# 2. Ship.
-rsync -av runs/fcp_minus0p8V/ frontier:scratch/fcp_minus0p8V/
-rsync -av ~/pseudos/ frontier:scratch/pseudos/          # if first time
-
-# 3. Submit on Frontier.
-ssh frontier
-echo "export CUOXDFT_PSEUDO_DIR=/lustre/.../pseudos" >> ~/.bashrc
-for d in /lustre/.../scratch/fcp_minus0p8V/*/; do
-    (cd "$d" && sbatch submit.sh)
-done
-
-# 4. Pull results, parse.
-rsync -av frontier:/lustre/.../scratch/fcp_minus0p8V/ runs/fcp_minus0p8V/
-for d in runs/fcp_minus0p8V/*/; do
-    copper-oxide-dft parse "$d/pw.out"
-done
-```
-
-The Frontier-side defaults in `SlurmConfig.for_frontier` already encode
-the cluster's MPI/GPU conventions (8 GCDs per node, GPU-aware MPICH,
-closest-binding) — see [ground_truths.md](ground_truths.md): Frontier
-SLURM conventions.
-
-### 7.1 Free-energy ranking at U = −0.8 V
-
-At each (coverage, U) point you have:
-
-- DFT total energy `E_DFT(coverage; U)` from the FCP-converged run
-- Total electron count `N_e(coverage; U)` from the FCP loop
-
-The grand-canonical free energy is `Ω = E_DFT − μ_e · N_e`, with
-`μ_e = -(V_abs + U)`. The lowest-Ω coverage at U = −0.8 V is the
-predicted surface state.
-
-This step is not yet in [pourbaix.py](../src/copper_oxide_dft/pourbaix.py)
-(it's aqueous-only) so write it inline for now:
-
-```python
-python -c "
-from copper_oxide_dft.parse import parse_pw_output
-V_ABS = 4.64    # Ag/AgCl absolute
-U = -0.8
-mu_e = -(V_ABS + U)    # eV vs vacuum
-
-# Parse each FCP-converged pw.out; QE prints the converged electron count
-# in the FCP section. The parse module currently extracts total energy,
-# Fermi energy, and magnetization; the FCP N_e extraction is TODO.
-# For now, grep manually:
-import re
-for label in ('clean','O_025ML','O_050ML','O_075ML','O_100ML'):
-    text = open(f'runs/fcp_minus0p8V/{label}/pw.out').read()
-    e_dft = parse_pw_output(f'runs/fcp_minus0p8V/{label}/pw.out').total_energy_ev
-    m = re.search(r'tot_charge\s*=\s*([-+0-9.eE]+)', text[-2000:])
-    q = float(m.group(1)) if m else 0.0
-    omega = e_dft - mu_e * (-q)   # N_e relative-to-neutral = -tot_charge
-    print(f'{label:>10}  E={e_dft:+.4f} eV  q={q:+.3f}  Ω-ref={omega:+.4f} eV')
-"
-```
-
-> **TODO**: `parse_fcp_output(...)` in
-> [parse.py](../src/copper_oxide_dft/parse.py) that extracts the
-> converged FCP electron count alongside the existing scalars, plus a
-> `grand_canonical_free_energy` helper in `che.py` for the non-aqueous
-> ranking. The current `che.py` is aqueous-Pourbaix-only; this is a
-> small addition once the structure of the FCP output stabilises.
-
----
-
-## What "good" looks like
-
-By the end of this guide you have:
-
-- ✅ A converged QE+CUDA build on DGX Spark
-- ✅ Phase-1 converged `ecutwfc` / kpts / degauss for your Cu system
-- ✅ A Hubbard-U value chosen and recorded in `ground_truths.md`
-- ✅ Vacuum surface and adsorption energies for Cu(111) at 0, 1/4, 1/2, 3/4, 1 ML O
-- ✅ A reference-electrode convention (Fc/Fc⁺ in MeCN) committed to `ground_truths.md`
-- ✅ A validated ESM-FCP input file at U = −0.8 V
-- ✅ Frontier-side production runs in flight or complete
-- ✅ A free-energy ranking of clean / O-covered Cu(111) at U = −0.8 V
-
-The result you're after is one of:
-
-- **Cu metal wins everywhere.** The cathodic regime suppresses surface
-  oxidation — consistent with the experimental Cu Pourbaix at U < 0 V.
-  Story is "predicted from first principles."
-- **A reconstruction wins.** Some O coverage or a relaxed Cu surface with
-  cation displacement is lower in Ω than clean Cu(111). Interesting
-  science; next step is to build the explicit reconstructed structure
-  (Phase 8).
-- **A coverage transition appears as U sweeps.** If you do U ∈ {−1.2,
-  −0.8, −0.4} V instead of just −0.8 V, the crossover potential is
-  experimentally measurable; worth doing as the second batch.
-
----
-
-## Pitfalls specific to this workflow
-
-- **"U vs Ag/AgCl is U vs SHE"** — it isn't. Off by +0.197 V (Ag/AgCl
-  sat. KCl). Off by even more in non-aqueous, where Ag/AgCl is a
-  pseudo-reference that drifts. **Lock `she_absolute_v=4.64` in every
-  call site** and *never* mix references mid-project. If you later
-  calibrate against Fc/Fc⁺, re-derive and update everywhere at once.
-- **"THF screens like water does"** — it doesn't. ε(THF) = 7.52 vs
-  ε(water) = 78.36. Implicit solvation in THF moves total energies by
-  tens of meV, not hundreds. Don't expect the implicit-solvent
-  correction to change which coverage wins — for that you'd need
-  explicit EtOH.
-- **"The EtOH proton donor doesn't matter for ESM-FCP"** — true at fixed
-  U with no PCET. But if you later switch to mechanism analysis (e.g.
-  "does -O at 1/4 ML get protonated and reduced at U = −0.8 V?") then
-  the μ(H⁺ + e⁻) reference is set by EtOH ⇌ EtO⁻ + H⁺, *not* H₂O ⇌ OH⁻
-  + H⁺. The CHE machinery in `che.py` is hard-coded to the water
-  reservoir — adapting it to EtOH is a future task.
-- **"CHE gives me the answer for free"** — only in aqueous. The Phase-4
-  Pourbaix machinery here will appear to run on non-aqueous data and
-  produce qualitatively meaningless diagrams. Skip Phase 4.
-- **"Cu(111) + O adsorbates *is* CuO"** — it's a proxy. Cu(111) + 1 ML
-  O is geometrically not CuO (CuO has 5-fold Cu coordination; the
-  adsorbate model has 3-fold). The proxy is for ranking, not for
-  structure prediction. The honest structure for "CuO on Cu" is the
-  coincident-supercell builder that doesn't exist yet (Section 0.2).
-- **"GB10 GPU is just like Frontier"** — Blackwell ≠ MI250X. Performance
-  scaling, peak memory, MPI rank counts are all different. Don't extrapolate
-  GB10 wall times to Frontier; benchmark on a small Frontier run first.
-- **"ESM-FCP converged on iteration 1"** — suspicious. FCP should require
+- **"U vs Ag/AgCl is U vs SHE"** — it isn't. Off by +0.197 V. In
+  non-aqueous, Ag/AgCl is a pseudo-reference that drifts. **Lock
+  `she_absolute_v=4.64` in every ESM-FCP call site** and *never* mix
+  references mid-project. If you later calibrate against Fc/Fc⁺,
+  re-derive and update [ground_truths.md](ground_truths.md) in one
+  pass.
+- **"PBE on Cu lands at a = 3.615 Å"** — it doesn't. PBE relaxes to
+  ~3.658 Å, a ~1.2 % overshoot. Every structure builder must read
+  `lattice_a_ang` from `configs/converged.json`, not the experimental
+  value.
+- **"GCGA in vacuum gives me the answer at U = −0.8 V for free"** — it
+  doesn't. The GCGA ranks by Ω_O at fixed μ_O; the constant-U ranking
+  needs the ESM-FCP rerank on Frontier (Block F). If you read the
+  GCGA's lowest-Ω structure and report it as "the answer at −0.8 V,"
+  you're confusing two different free energies.
+- **"More GCGA generations → better answer"** — not for free. MACE
+  has a finite-MAE error envelope; running 1 000 generations chases
+  noise once you're inside the MAE band. Stop at 50–100; spend the
+  saved time on a wider μ_O sweep.
+- **"The MACE test MAE doesn't matter once the GCGA is running"** —
+  it absolutely does. If MAE = 25 meV/atom and the cell is 200 atoms,
+  that's a 5 eV error envelope on Ω. Anything inside that envelope is
+  noise; you may need to re-rerank the top-50 (not top-20) and let
+  ESM-FCP filter the noise.
+- **"ESM-FCP converged on iteration 1"** — suspicious. FCP should need
   several outer iterations to align the Fermi level. A 1-iteration
   "convergence" usually means `fcp_thr` is too loose.
-- **Pseudopotential filename mismatch** — the CLI defaults assume
-  `Cu.upf`, `O.upf`, `H.upf`. PseudoDojo downloads with longer names;
-  rename or pass `--cu-pseudo`/`--o-pseudo`/`--h-pseudo` everywhere.
+- **"`tot_charge` is the converged FCP charge"** — only if the regex
+  picks the right line. **Verify against a real Frontier pw.out
+  before trusting Ω(U) for ranking** (see §7.4).
+- **"The SLD profile looks great so we're done"** — only if the
+  bulk-Cu region overlaps the experimental baseline *after* applying
+  `bulk_cu_normalization_factor`. Without the normalisation, every
+  SLD is biased by ~3.5 % from the PBE-lattice overshoot.
+- **"GB10 GPU is just like Frontier"** — Blackwell ≠ MI250X.
+  Performance scaling, peak memory, MPI rank counts are all different.
+  Don't extrapolate GB10 wall times to Frontier; benchmark a small
+  Frontier run first.
+- **Pseudopotential filename mismatch** — defaults are now
+  [`DEFAULT_PSEUDOPOTENTIALS`](../src/copper_oxide_dft/qe_input.py)
+  (Cu.upf, O.upf, H.upf). PseudoDojo downloads with longer names;
+  rename or override the dict everywhere.
 
 ---
 
 ## Related docs
 
+- [ml-gcgo-pivot.md](ml-gcgo-pivot.md) — methodology lock for the
+  MLIP-GCGO pivot; read this *before* changing any default in the
+  pipeline.
+- [machine-learned-dft.md](machine-learned-dft.md) — reference
+  manuscript walkthrough this workflow reproduces.
+- [dgx-spark-ml-install.md](dgx-spark-ml-install.md) — DGX Spark
+  install checklist for the ML extras.
 - [implementation-plan.md](implementation-plan.md) — full 9-phase
-  roadmap (aqueous default).
-- [local-workstation.md](local-workstation.md) — Ubuntu CPU walkthrough,
-  covers Phases 1–8 with the aqueous defaults. Use as the cross-reference
-  for any phase this guide is brief on.
+  roadmap; Phase 3 is now superseded for the central question by
+  Blocks C–G.
+- [local-workstation.md](local-workstation.md) — Ubuntu CPU walkthrough
+  with aqueous defaults; cross-reference for any phase this guide is
+  brief on (Phases 1–2 in particular).
 - [ground_truths.md](ground_truths.md) — methodology decisions, AFM CuO
-  gotchas, Frontier conventions. **Update with your non-aqueous reference
-  electrode choice before you do anything else.**
-- [project.md](project.md) — scope and dependencies.
+  gotchas, Frontier conventions, MLIP-GCGO pivot summary.
+- [project.md](project.md) — project scope, dependencies, MLIP-GCGO
+  example usage.

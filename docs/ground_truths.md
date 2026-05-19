@@ -276,6 +276,69 @@ current explicit-override path is fine once you know, and an automatic
 behavior would surprise the next person who *wants* the symmetry kept
 for a free-floating symmetric slab without constraints.
 
+### 2026-05-18: MLIP-GCGO pivot — replacing the Phase 3 O-adsorbate ladder
+
+For the central scientific question — *why does a copper oxide remain on
+Cu(111) at U = −0.8 V (vs Ag/AgCl) in THF + 1 % EtOH?* — the
+hand-built 4-coverage O-on-Cu(111) ladder of
+[startup-cuo-cu-nonaqueous.md §4](startup-cuo-cu-nonaqueous.md) is
+superseded by an MLIP-GCGO (machine-learned interatomic potential +
+grand-canonical genetic algorithm) workflow modelled on the Sandia
+manuscript walkthrough in [machine-learned-dft.md](machine-learned-dft.md).
+Full pivot rationale and scope in [ml-gcgo-pivot.md](ml-gcgo-pivot.md);
+the load-bearing decisions are pinned here so they aren't silently
+re-litigated:
+
+- **Why the proxy ladder fails for this question**: 4 hand-built
+  coverages cannot find an intermediate-stoichiometry reconstruction
+  they weren't seeded with. The original §0.2 admitted this; the pivot
+  acts on it.
+- **Functional**: PBE + Hubbard U = 4.0 eV, unchanged from Phase 1.
+  Switching to PBEsol (which the Sandia manuscript used) would
+  invalidate `configs/converged.json` and AFM CuO settings — not worth
+  it. Cost: our MACE test MAE cannot be directly compared to the
+  manuscript's 9.8 meV/atom; expect 10–20 meV/atom and treat > 30 as a
+  pipeline problem.
+- **Solvation strategy**: vacuum throughout the DFT dataset, MACE
+  training, GCGA search, and the Frontier ESM-FCP top-K rerank.
+  Environ-THF (ε = 7.52) added as **one** single-point correction on
+  the predicted winner. THF screens 10× less than water; the Ω
+  ordering across coverages should not flip from vacuum, but quoting
+  the solvent-included number is honest.
+- **μ_O ↔ μ_e bridge (working assumption)**: GCGA produces an ensemble
+  parametrised by μ_O (manuscript range [−7.0, −6.0] eV). Constant-U
+  ranking happens *after* the search, via Ω = E_DFT − μ_e·N_e on the
+  ESM-FCP-converged top-K. We do **not** try to close μ_O ↔ μ_e
+  algebraically via the water reservoir in `che.py` — that would
+  introduce a 100+ meV bias because EtOH, not H₂O, is the proton donor
+  in this system. The EtOH-anchored closure is future work.
+- **GCGA system**: Cu(111) 12-layer, top 6 layers active, O-only
+  insertion/deletion (no Cu mobility this round). Lateral size starts
+  at (4×4); revisit after the first ensemble is in hand.
+- **What survives**: `configs/converged.json`, `build_bulk_*`,
+  `write_pw_input`, `spin_and_hubbard_overrides`,
+  `fcp_overrides_for_potential`, `make-slurm`, `submit.py`,
+  `parse_pw_output`. `che.py` and `pourbaix.py` stay aqueous-only and
+  untouched for now.
+- **What is retired (for this question)**: `build_cu111_slab` +
+  `add_oxygen_adsorbates` as the *production* answer for "what wins
+  at U = −0.8 V". Kept in-tree as a useful proxy / sanity check;
+  Phase 3 of startup-cuo-cu-nonaqueous.md becomes optional groundwork.
+- **New code surface**: `src/copper_oxide_dft/ml/{box_sampling,qe_driver,
+  curate,validate,gcga,ensemble,fcp_rerank,sld}.py`. No CLI bindings in
+  the MVP — exposed as a CLI once the pipeline is run end-to-end at
+  least once.
+- **Sub-question split**: thermodynamic answer (Block F above)
+  produces a single (x_O, structure) winner at U = −0.8 V; kinetic
+  answer (NEB, [neb.py](../src/copper_oxide_dft/neb.py) already
+  scaffolded) is a follow-up; observable answer (SLD vs
+  neutron-reflectometry) is what makes it falsifiable.
+- **Risks ordered by likelihood of biting first**: GOCIA/MACE
+  aarch64 packaging churn → MACE test MAE refusing to drop → vacuum-μ_O
+  GCGA candidates clustering outside the experimentally relevant x_O
+  range → ESM-FCP non-convergence on disordered 12-layer cells →
+  Ag/AgCl pseudo-reference drift in THF.
+
 ### Resources to bookmark
 
 - Quantum ESPRESSO documentation: <https://www.quantum-espresso.org/documentation/>

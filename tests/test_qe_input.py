@@ -7,11 +7,13 @@ from pathlib import Path
 import pytest
 
 from copper_oxide_dft.qe_input import (
+    DEFAULT_PSEUDOPOTENTIALS,
     EV_PER_RYDBERG,
     PSEUDO_DIR_ENV_VAR,
     SHE_ABSOLUTE_POTENTIAL_V,
     SUPPORTED_CALCULATIONS,
     fcp_overrides_for_potential,
+    merge_namelist_overrides,
     spin_and_hubbard_overrides,
     write_hp_input,
     write_pw_input,
@@ -378,3 +380,50 @@ def test_fcp_overrides_composes_with_spin_hubbard(
     assert "esm" in text
     assert "nspin" in text
     assert "hubbard_u(1)" in text
+
+
+# ---- merge_namelist_overrides + DEFAULT_PSEUDOPOTENTIALS ------------------
+
+
+def test_merge_namelist_overrides_combines_dicts() -> None:
+    a = {"system": {"nspin": 2}, "control": {"prefix": "x"}}
+    b = {"system": {"degauss": 0.01}}
+    merged = merge_namelist_overrides(a, b)
+    assert merged["system"] == {"nspin": 2, "degauss": 0.01}
+    assert merged["control"] == {"prefix": "x"}
+
+
+def test_merge_namelist_overrides_later_overwrites_within_namelist() -> None:
+    a = {"system": {"nspin": 1}}
+    b = {"system": {"nspin": 2}}
+    merged = merge_namelist_overrides(a, b)
+    assert merged["system"]["nspin"] == 2
+
+
+def test_merge_namelist_overrides_does_not_mutate_inputs() -> None:
+    a = {"system": {"nspin": 2}}
+    b = {"system": {"degauss": 0.01}}
+    a_snap = {k: dict(v) for k, v in a.items()}
+    b_snap = {k: dict(v) for k, v in b.items()}
+    merge_namelist_overrides(a, b)
+    assert a == a_snap
+    assert b == b_snap
+
+
+def test_merge_namelist_overrides_handles_none_sources() -> None:
+    """None is treated as an empty mapping — lets callers splat optional dicts."""
+    a = {"system": {"nspin": 2}}
+    merged = merge_namelist_overrides(a, None, None)
+    assert merged == {"system": {"nspin": 2}}
+
+
+def test_merge_namelist_overrides_zero_sources_returns_empty() -> None:
+    assert merge_namelist_overrides() == {}
+
+
+def test_default_pseudopotentials_covers_project_species() -> None:
+    """Cu, O, H are the three species the project actually computes with."""
+    assert set(DEFAULT_PSEUDOPOTENTIALS) >= {"Cu", "O", "H"}
+    for sym, fname in DEFAULT_PSEUDOPOTENTIALS.items():
+        # Filenames are PseudoDojo conventions: SymbolPart.upf at minimum.
+        assert fname.endswith(".upf")

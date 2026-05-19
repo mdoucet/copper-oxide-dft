@@ -50,6 +50,24 @@ md = [
     "scipy>=1.11.0",
 ]
 
+# MLIP-GCGO pipeline (see docs/ml-gcgo-pivot.md).
+# Heavy deps; install via `pip install -e ".[ml]"` only on the DGX Spark workstation.
+# torch / mace-torch / dscribe / umap-learn / h5py are aarch64-compatible but
+# CUDA wheels for Blackwell may need the NVHPC SDK in PATH at install time.
+ml = [
+    "scipy>=1.11.0",
+    "scikit-learn>=1.3.0",
+    "h5py>=3.10.0",
+    "dscribe>=2.1.0",
+    "umap-learn>=0.5.5",
+    "torch>=2.2.0",
+    "mace-torch>=0.3.6",
+    # GOCIA is currently distributed as source from
+    # https://github.com/zhouluo/GOCIA; install with
+    # `pip install git+https://github.com/zhouluo/GOCIA.git` after
+    # `pip install -e ".[ml]"`.
+]
+
 # Documentation
 docs = [
     "sphinx>=7.2.0",

@@ -36,6 +36,54 @@ Phase 4 Pourbaix work; calibrate via hp.x linear response in Phase 2."""
 
 SUPPORTED_CALCULATIONS = frozenset({"scf", "nscf", "relax", "vc-relax", "md"})
 
+DEFAULT_PSEUDOPOTENTIALS: Mapping[str, str] = {
+    "Cu": "Cu.upf",
+    "O": "O.upf",
+    "H": "H.upf",
+}
+"""Project-standard PseudoDojo PBE PAW filenames. The ESM-FCP and MLIP-GCGO
+pipelines both consume this; promote any additional species here rather than
+duplicating the dict at call sites."""
+
+
+def merge_namelist_overrides(
+    *sources: Mapping[str, Mapping[str, Any]] | None,
+) -> dict[str, dict[str, Any]]:
+    """Merge multiple ``extra_input_data`` dicts, last-wins per key.
+
+    The :func:`write_pw_input` ``extra_input_data`` parameter takes a
+    ``{namelist: {key: value}}`` mapping. Two helpers in this module
+    (:func:`fcp_overrides_for_potential`, :func:`spin_and_hubbard_overrides`)
+    each return such a mapping, and downstream callers (ML dataset
+    generation, ESM-FCP rerank) routinely need to combine them. This
+    helper does the per-namelist ``update(...)`` so callers don't
+    re-implement it (and don't forget the ``setdefault`` step that
+    keeps previously-set keys in a namelist alive when a later source
+    only touches a subset).
+
+    Args:
+        *sources: Zero or more ``{namelist: {key: value}}`` mappings.
+            ``None`` is silently treated as the empty mapping so
+            callers can splat in optional dicts.
+
+    Returns:
+        A new ``dict[str, dict[str, Any]]`` containing the merged
+        overrides. Inputs are not mutated.
+
+    Example:
+        >>> fcp = fcp_overrides_for_potential(-0.8, she_absolute_v=4.64)
+        >>> spin = spin_and_hubbard_overrides(atoms, nspin=2, hubbard_u={"Cu": 4.0})
+        >>> merged = merge_namelist_overrides(fcp, spin)
+        >>> write_pw_input(atoms, ..., extra_input_data=merged)
+    """
+    merged: dict[str, dict[str, Any]] = {}
+    for source in sources:
+        if source is None:
+            continue
+        for namelist, entries in source.items():
+            merged.setdefault(namelist, {}).update(entries)
+    return merged
+
 
 def _resolve_pseudo_dir(pseudo_dir: str | os.PathLike[str] | None) -> Path:
     if pseudo_dir is None:
