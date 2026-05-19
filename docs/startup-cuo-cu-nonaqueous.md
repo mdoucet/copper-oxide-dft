@@ -118,7 +118,7 @@ Two installs are needed:
   DFT dataset and the ESM-FCP smoke test.
 - **Python ML stack on top of the existing package** (Section 1.4 below;
   full details in [dgx-spark-ml-install.md](dgx-spark-ml-install.md)):
-  torch + MACE + dscribe + scikit-learn + UMAP + h5py + GOCIA.
+  torch + MACE + dscribe + scikit-learn + UMAP + h5py + ase-ga.
 
 Once both work, the GCGA pipeline is `python -c "..."` on the
 workstation.
@@ -198,9 +198,8 @@ python -m venv venv && source venv/bin/activate
 pip install -e ".[dev]"
 pytest -q                 # expect 358 passed, 1 skipped (dscribe/umap path)
 
-# Heavy ML stack — adds torch, MACE, dscribe, sklearn, UMAP, h5py.
+# Heavy ML stack — adds torch, MACE, dscribe, sklearn, UMAP, h5py, ase-ga.
 pip install -e ".[ml]"
-pip install git+https://github.com/zhouluo/GOCIA.git
 ```
 
 Full bring-up checklist with smoke tests is in
@@ -702,42 +701,48 @@ The substrate carries a `FixAtoms` constraint on the bottom 6 layers;
 GCGA's mutation routines respect it (only `active` atoms can be moved
 or deleted, and insertions land on top of the active region).
 
-### 6.2 Pin the GOCIA API on first run
+### 6.2 GA backend: ase-ga
 
-The wrapper `copper_oxide_dft.ml.gcga.run_gcga_sweep` deliberately
-raises `NotImplementedError`. The GOCIA package has reshuffled its
-public API across releases; pin it once against the version installed
-in your venv.
+The GA backend is **ase-ga** (the maintained spin-out of `ase.ga` by
+the DTU/CAMD core ASE team — see
+[dtu-energy/ase-ga](https://github.com/dtu-energy/ase-ga)). The
+project switched from GOCIA on 2026-05-19; see
+[ground_truths.md](ground_truths.md) for the rationale and
+[ml-gcgo-pivot.md](ml-gcgo-pivot.md) for the design.
+
+The driver `copper_oxide_dft.ml.gcga.run_gcga_sweep` is fully
+implemented — no API pinning required, no `NotImplementedError`. It
+combines:
+
+- `ase_ga.standardmutations.RattleMutation` for in-place rattling of
+  active atoms (via the thin wrapper [`rattle_offspring`](../src/copper_oxide_dft/ml/gcga.py)).
+- Project-specific [`insert_oxygen_offspring`](../src/copper_oxide_dft/ml/gcga.py)
+  / [`remove_oxygen_offspring`](../src/copper_oxide_dft/ml/gcga.py)
+  for the variable-composition operators (ase-ga's stdlib is
+  fixed-composition).
+- An in-memory (μ + λ) loop with k-way tournament selection on the
+  biased grand potential.
+
+Quick smoke test (no MACE, no GPU — uses the operators directly):
 
 ```bash
-python -c "import gocia; print(gocia.__version__ if hasattr(gocia, '__version__') else 'src'); help(gocia)" \
-    | head -40
+python - <<'PY'
+import numpy as np
+from copper_oxide_dft.ml.gcga import (
+    build_cu111_gcga_substrate, rattle_offspring, insert_oxygen_offspring,
+    _blmin_atomic_numbers, DEFAULT_MIN_PAIR_DISTANCE_ANG,
+)
+slab, active = build_cu111_gcga_substrate(layers=4, lateral=(2, 2), active_top_layers=2)
+n_slab = len(slab) - len(active)
+blmin = _blmin_atomic_numbers(DEFAULT_MIN_PAIR_DISTANCE_ANG)
+rng = np.random.default_rng(0)
+print("rattle:", rattle_offspring(slab, n_slab, blmin, 0.1, rng).get_chemical_formula())
+print("insert:", insert_oxygen_offspring(slab, n_slab, DEFAULT_MIN_PAIR_DISTANCE_ANG, 50, 1.5, rng).get_chemical_formula())
+PY
 ```
 
-Check which of these import paths actually works and update
-[gcga.py](../src/copper_oxide_dft/ml/gcga.py) `run_gcga_sweep` to call
-the matching API:
-
-- `from gocia.popGen import evolve` (manuscript-era)
-- `from gocia.geneticAlgorithm import run_ga` (newer)
-- something else — read the GOCIA README.
-
-The MACE calculator factory you'll plug in:
-
-```python
-from mace.calculators import MACECalculator
-mace_calc = MACECalculator(model_paths=[model_path], device="cuda")
-
-def evaluate(atoms):
-    atoms.calc = mace_calc
-    e = atoms.get_potential_energy()
-    return biased_grand_potential_ev(e, atoms, config)
-```
-
-The math is already in [gcga.py](../src/copper_oxide_dft/ml/gcga.py)
-(`grand_potential_ev`, `gaussian_bias_ev`, `biased_grand_potential_ev`,
-`compute_x_o`). The substrate and active-index logic are also done.
-Only the GOCIA glue is missing.
+The full driver pulls in MACE for the fitness; the GPU code path runs
+end-to-end on DGX Spark (§6.3).
 
 ### 6.3 Unbiased μ_O sweep
 
@@ -826,9 +831,8 @@ from copper_oxide_dft.ml import (
     read_ensemble_extxyz, write_ensemble_extxyz, top_k_by_omega,
 )
 
-# Each run_gcga_sweep call should write its final population as
-# `<out>/population.extxyz` (this is what your GOCIA pin in §6.2 should
-# produce). Pool them all here.
+# Each run_gcga_sweep call writes its final population as
+# `<out>/population.extxyz`. Pool them all here.
 runs = list(Path("runs/gcga").rglob("population.extxyz"))
 print(f"Found {len(runs)} GCGA populations.")
 

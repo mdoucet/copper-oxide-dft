@@ -15,7 +15,7 @@ Modules:
   settings; batched relaxations on DGX Spark.
 - :mod:`curate` — force-filter, SOAP+IPCA+UMAP subsample, extxyz writers.
 - :mod:`validate` — held-out test-set MAE for the fine-tuned MACE model.
-- :mod:`gcga` — GOCIA-driven GCGA on Cu(111).
+- :mod:`gcga` — ase-ga-driven grand-canonical GA on Cu(111).
 - :mod:`ensemble` — per-x_O minimum-Ω extraction.
 - :mod:`fcp_rerank` — Frontier ESM-FCP rerank inputs + ranking.
 - :mod:`sld` — neutron-reflectometry SLD calculator.

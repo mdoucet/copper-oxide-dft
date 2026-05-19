@@ -333,16 +333,76 @@ re-litigated:
   answer (NEB, [neb.py](../src/copper_oxide_dft/neb.py) already
   scaffolded) is a follow-up; observable answer (SLD vs
   neutron-reflectometry) is what makes it falsifiable.
-- **Risks ordered by likelihood of biting first**: GOCIA/MACE
-  aarch64 packaging churn → MACE test MAE refusing to drop → vacuum-μ_O
-  GCGA candidates clustering outside the experimentally relevant x_O
-  range → ESM-FCP non-convergence on disordered 12-layer cells →
-  Ag/AgCl pseudo-reference drift in THF.
+- **Risks ordered by likelihood of biting first**: MACE
+  aarch64+Blackwell packaging churn → MACE test MAE refusing to drop →
+  vacuum-μ_O GCGA candidates clustering outside the experimentally
+  relevant x_O range → ESM-FCP non-convergence on disordered 12-layer
+  cells → Ag/AgCl pseudo-reference drift in THF. (GA-backend risk
+  retired 2026-05-19 with the switch from GOCIA to `ase-ga`; see the
+  2026-05-19 entry below.)
+
+### 2026-05-19: GA backend — GOCIA dropped, ase-ga adopted
+
+The Block E grand-canonical genetic algorithm is now driven by
+**ase-ga**, not GOCIA. Background: GOCIA is the
+[zhouluo/GOCIA](https://github.com/zhouluo/GOCIA) source-only package
+that the Sandia reference manuscript used. It has a tiny user base,
+no PyPI release, and its public API has reshuffled across releases —
+the wrapper in [gcga.py](../src/copper_oxide_dft/ml/gcga.py) deliberately
+left the call site stubbed so a community-adopted alternative could
+land in one place. That happened on 2026-05-19.
+
+**Why ase-ga**:
+
+- It is the package that the canonical ASE-GA implementation (Vilhelmsen
+  & Hammer, *J. Chem. Phys.* 141, 044711, 2014) has lived in since ASE
+  3.28 spun it out of the core repo. Maintainer is the same DTU/CAMD
+  team that wrote the original paper. Project home:
+  [dtu-energy/ase-ga](https://github.com/dtu-energy/ase-ga). Installable
+  via `pip install ase-ga`.
+- The 2014 paper is the *original* methodology that GOCIA descends
+  from; we are switching to the upstream implementation, not to a
+  competitor.
+- The grand-canonical fitness math (`grand_potential_ev`,
+  `gaussian_bias_ev`, `biased_grand_potential_ev`, `compute_x_o`) in
+  [gcga.py](../src/copper_oxide_dft/ml/gcga.py) is unchanged — only the
+  GA loop and operators changed.
+
+**API shape we depend on** (ase-ga 1.0):
+
+- `ase_ga.offspring_creator.OffspringCreator` — base class for mutation
+  operators. `get_new_individual(parents) -> (Atoms | None, str)`.
+- `ase_ga.standardmutations.RattleMutation` — used for the in-place
+  perturbation step.
+- Our own `InsertOxygenMutation` and `RemoveOxygenMutation` subclass
+  `OffspringCreator` and provide the variable-composition operators
+  GOCIA used to supply. They live in
+  [gcga.py](../src/copper_oxide_dft/ml/gcga.py).
+- We do **not** use `ase_ga.data.DataConnection` / `Population` — those
+  assume fixed composition. Our GCGA loop is an in-memory tournament
+  driver in `run_gcga_sweep`.
+
+**Atom-ordering convention** (load-bearing): the substrate produced by
+`build_cu111_gcga_substrate` places the **active atoms (top layers)
+last** in the `Atoms` list. ase-ga and our insert/remove operators both
+rely on the convention `slab = atoms[:n_slab]; active = atoms[n_slab:]`.
+Any future change to `build_cu111_slab` that breaks this ordering will
+silently corrupt the GCGA — the constraints + active-index logic look
+right but the operators will move/delete the wrong atoms. Guard test:
+[test_substrate_active_indices_are_top_n_layers](../tests/test_ml_gcga.py).
+
+**Risk note (replaces the earlier "GOCIA/MACE installation churn"
+entry)**: the GOCIA install risk is gone — `pip install ase-ga` is a
+PyPI install with a pure-Python wheel. The remaining install risk is
+MACE on aarch64+Blackwell (still item #1 of the
+[ml-gcgo-pivot.md](ml-gcgo-pivot.md) risk list).
 
 ### Resources to bookmark
 
 - Quantum ESPRESSO documentation: <https://www.quantum-espresso.org/documentation/>
 - PseudoDojo: <http://www.pseudo-dojo.org/>
 - ASE QE calculator docs: <https://wiki.fysik.dtu.dk/ase/ase/calculators/espresso.html>
+- ase-ga (GA backend): <https://github.com/dtu-energy/ase-ga> — successor to `ase.ga`.
 - Environ module: <https://environ.readthedocs.io/>
 - Nørskov CHE paper: J. Phys. Chem. B 108, 17886 (2004) — the canonical reference for CHE.
+- Vilhelmsen & Hammer, *J. Chem. Phys.* 141, 044711 (2014) — the original ASE-GA paper, foundation for our Block E.

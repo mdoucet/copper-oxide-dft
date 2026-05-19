@@ -20,9 +20,8 @@ The pipeline follows :doc:`/docs/machine-learned-dft.md` §2:
    manuscript's "enforcing Cu-O connectivity" clause and prevents floating
    O atoms that don't represent a physical Cu-O environment.
 
-This is a pure-ASE re-implementation rather than a GOCIA wrapper, so the
-perturbation step has no GOCIA dependency. GOCIA is still required for the
-downstream GCGA (Block E of the pivot plan); see
+This is a pure-ASE implementation — the perturbation step has no GA-backend
+dependency. The downstream GCGA (Block E of the pivot plan) uses ase-ga; see
 :mod:`copper_oxide_dft.ml.gcga`.
 """
 

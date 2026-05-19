@@ -54,6 +54,9 @@ md = [
 # Heavy deps; install via `pip install -e ".[ml]"` only on the DGX Spark workstation.
 # torch / mace-torch / dscribe / umap-learn / h5py are aarch64-compatible but
 # CUDA wheels for Blackwell may need the NVHPC SDK in PATH at install time.
+# ase-ga is the GA backend (replaced GOCIA on 2026-05-19; see
+# docs/ground_truths.md). It is the maintained spin-out of ASE's built-in
+# `ase.ga` module by the same DTU/CAMD team.
 ml = [
     "scipy>=1.11.0",
     "scikit-learn>=1.3.0",
@@ -62,10 +65,7 @@ ml = [
     "umap-learn>=0.5.5",
     "torch>=2.2.0",
     "mace-torch>=0.3.6",
-    # GOCIA is currently distributed as source from
-    # https://github.com/zhouluo/GOCIA; install with
-    # `pip install git+https://github.com/zhouluo/GOCIA.git` after
-    # `pip install -e ".[ml]"`.
+    "ase-ga>=1.0",
 ]
 
 # Documentation

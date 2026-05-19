@@ -134,7 +134,7 @@ stands; calibration against Fc/Fc⁺ is a future correction.
 
 | Stage | Cells | Sources |
 |---|---|---|
-| Box-sampling seeds | Cu, Cu₈O, Cu₂O, Cu₄O₃, CuO, c-CuO | Manuscript; bulk Cu and bulk CuO come from [`build_bulk_cu`](../src/copper_oxide_dft/structure_builder.py) / [`build_bulk_cuo`](../src/copper_oxide_dft/structure_builder.py), the others built from materials-project–style structures or via GOCIA's `random_box` initializer. |
+| Box-sampling seeds | Cu, Cu₈O, Cu₂O, Cu₄O₃, CuO, c-CuO | Manuscript; bulk Cu and bulk CuO come from [`build_bulk_cu`](../src/copper_oxide_dft/structure_builder.py) / [`build_bulk_cuo`](../src/copper_oxide_dft/structure_builder.py), the others built from materials-project–style structures or via the box-sampling perturbations in [`ml/box_sampling.py`](../src/copper_oxide_dft/ml/box_sampling.py). |
 | GCGA substrate | Cu(111) 12 layers, lateral (m×n) tbd | Top 6 layers active region. Lateral size is the trade-off between μ_O resolution and wall time; start with (4×4) and revisit. |
 | Active species | Cu, O | No Cu insertion in this round — only O reorganization on a fixed Cu base. Cu mobility is a Phase 8 extension. |
 
@@ -143,7 +143,7 @@ stands; calibration against Fc/Fc⁺ is a future correction.
 | Component | Status | Notes |
 |---|---|---|
 | `configs/converged.json` (Phase 1) | **Reused** | Source of ecutwfc, kpts (for non-Γ uses), degauss, lattice. |
-| `build_bulk_cu`, `build_bulk_cuo`, `build_cu2o_111_slab` | **Reused** | Seed structures for GOCIA. |
+| `build_bulk_cu`, `build_bulk_cuo`, `build_cu2o_111_slab` | **Reused** | Seed structures for box-sampling and the GA substrate. |
 | `write_pw_input`, `spin_and_hubbard_overrides` | **Reused** | Box-sampling QE input generation. |
 | `fcp_overrides_for_potential` | **Reused** | Top-K ESM-FCP rerank inputs. |
 | `make-slurm`, `submit.py` | **Reused** | Frontier production for Block F. |
@@ -163,7 +163,7 @@ All under `src/copper_oxide_dft/ml/`:
 | `qe_driver.py` | Wrap ASE-Espresso calculator with the converged config; batched execution; manifest tracking. |
 | `curate.py` | Force-filter, SOAP+IPCA+UMAP subsample, extxyz writers. |
 | `validate.py` | Energy/force MAE on held-out test set. |
-| `gcga.py` | Wrap GOCIA's GCGA on Cu(111); μ_O sweep + Gaussian-biased pass. |
+| `gcga.py` | ase-ga-driven grand-canonical GA on Cu(111); μ_O sweep + Gaussian-biased pass. Project-specific `insert_oxygen_offspring` / `remove_oxygen_offspring` operators alongside ase-ga's `RattleMutation`. |
 | `ensemble.py` | Merge biased + unbiased; per-x_O minima extraction; HDF5 ensemble store. |
 | `fcp_rerank.py` | Pick top-K; generate ESM-FCP inputs at U = −0.8 V; emit Frontier SLURM. |
 | `sld.py` | 10 Å interfacial slab → SLD with bulk-Cu normalization. |
@@ -192,12 +192,15 @@ explicitly *out of scope* for this iteration; they become tractable
 
 ## 7. Known risks (in priority order)
 
-1. **GOCIA / MACE installation churn on ARM.** Both packages target
-   x86_64 NVIDIA primarily; aarch64 wheels may be missing. First
-   measurable Block-B milestone is "the official examples run on DGX
-   Spark." If installation eats more than 3 days, fall back to building
-   the dataset on Frontier and porting only the MACE inference back to
-   the workstation.
+1. **MACE installation churn on ARM.** mace-torch targets x86_64
+   NVIDIA primarily; aarch64+Blackwell wheels may be missing. First
+   measurable Block-B milestone is "the official MACE examples run on
+   DGX Spark." If installation eats more than 3 days, fall back to
+   building the dataset on Frontier and porting only the MACE inference
+   back to the workstation. (The GA-backend install risk that used to
+   sit here — GOCIA from source — went away on 2026-05-19 when we
+   switched to `ase-ga`, a pure-Python PyPI install; see
+   [ground_truths.md](ground_truths.md) 2026-05-19 entry.)
 2. **PBE vs PBEsol calibration.** The manuscript's hyperparameters
    (batch=4, lr=0.01, 50 epochs) were tuned against PBEsol energies. If
    our PBE test MAE refuses to drop below 30 meV/atom, the first thing

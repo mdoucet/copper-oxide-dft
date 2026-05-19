@@ -30,21 +30,22 @@ cd ~/git/copper-oxide-dft
 source venv/bin/activate
 
 # Heavy install — torch + mace + dscribe pull a lot of native libs.
+# ase-ga is the GA backend (replaced GOCIA on 2026-05-19); it's
+# pulled in by [ml] via PyPI.
 pip install -e ".[ml]"
-
-# GOCIA is not on PyPI; install from source.
-pip install git+https://github.com/zhouluo/GOCIA.git
 
 # Verify
 python - <<'PY'
 import torch, mace, dscribe, umap, h5py, sklearn, scipy
-import gocia
+import ase_ga
 print(f"torch   : {torch.__version__}  cuda={torch.cuda.is_available()}")
 print(f"mace    : {mace.__version__}")
 print(f"dscribe : {dscribe.__version__}")
 print(f"umap    : {umap.__version__}")
 print(f"sklearn : {sklearn.__version__}")
-print(f"gocia   : {getattr(gocia, '__version__', 'src checkout')}")
+print(f"ase-ga  : installed; standardmutations available: ", end="")
+from ase_ga.standardmutations import RattleMutation
+print(RattleMutation is not None)
 PY
 ```
 
@@ -89,24 +90,36 @@ Record the path:
 echo "export MACE_MP_0_MEDIUM=$HOME/models/2023-12-03-mace-mp-0-medium.model" >> ~/.bashrc
 ```
 
-## 3. GOCIA smoke test
+## 3. ase-ga smoke test
 
 ```bash
 python - <<'PY'
-from gocia.interface import Interface
-from ase.build import bulk
-import gocia.popGen.geneticOps as ops
+from ase_ga.standardmutations import RattleMutation
+from ase_ga.offspring_creator import OffspringCreator
+from copper_oxide_dft.ml.gcga import (
+    build_cu111_gcga_substrate, rattle_offspring,
+    _blmin_atomic_numbers, DEFAULT_MIN_PAIR_DISTANCE_ANG,
+)
+import numpy as np
 
-cu_bulk = bulk("Cu", cubic=True)
-print(f"GOCIA Interface API present: {hasattr(Interface, '__init__')}")
-print(f"GOCIA ops module present:    {hasattr(ops, 'mut_rattle')}")
+slab, active = build_cu111_gcga_substrate(layers=4, lateral=(2, 2), active_top_layers=2)
+n_slab = len(slab) - len(active)
+blmin = _blmin_atomic_numbers(DEFAULT_MIN_PAIR_DISTANCE_ANG)
+rng = np.random.default_rng(0)
+offspring = rattle_offspring(slab, n_slab, blmin, rattle_strength=0.1, rng=rng)
+print(f"ase-ga RattleMutation produced: {len(offspring)} atoms")
+print(f"Slab atoms untouched? "
+      f"{np.allclose(offspring.positions[:n_slab], slab.positions[:n_slab])}")
 PY
 ```
 
-The API surface evolves; if the import fails on `gocia.popGen.geneticOps`,
-the package layout changed — check `python -c "import gocia; help(gocia)"`
-and update `src/copper_oxide_dft/ml/gcga.py` to match. The pivot doc
-assumes the manuscript-era API.
+ase-ga is a stable PyPI package (since ASE 3.28 spun it out of the core
+repo) maintained by the DTU/CAMD ASE team. The mutation operator API
+is the one documented at
+[dtu-energy/ase-ga](https://github.com/dtu-energy/ase-ga). If a future
+release breaks the import paths above, pin `ase-ga<x.y` in
+[pyproject.toml](../pyproject.toml) until the wrappers in
+[gcga.py](../src/copper_oxide_dft/ml/gcga.py) are updated.
 
 ## 4. Verify the existing test suite still passes
 
@@ -149,10 +162,12 @@ echo 'source ~/.cuoxdft_ml_env' >> ~/.bashrc
   If the curl in §2 404s, find the latest release at
   `https://github.com/ACEsuit/mace-mp/releases` and update the URL in
   this doc.
-- **GOCIA installed but import names different.** The package has had a
-  few naming reshuffles. If `from gocia.popGen ...` doesn't work, check
-  `from gocia.geneticAlgorithm ...`. Whichever import path works gets
-  pinned in `src/copper_oxide_dft/ml/gcga.py`.
+- **ase-ga API drift.** Unlikely for `ase-ga >= 1.0`, but if a future
+  major release renames `ase_ga.standardmutations.RattleMutation` or
+  changes the `(blmin, n_top)` signature, the wrappers in
+  [gcga.py](../src/copper_oxide_dft/ml/gcga.py) will need an update.
+  Pin `ase-ga<x.y` in [pyproject.toml](../pyproject.toml) as a hotfix
+  if `import ase_ga` succeeds but `rattle_offspring` raises.
 - **`torch.cuda.is_available()` returns True but `mace_mp(device="cuda")`
   silently runs on CPU.** Watch the GPU with `nvidia-smi` during the
   smoke test. If GPU utilisation stays at 0, MACE fell back to CPU and

@@ -2,6 +2,19 @@ Shifting this workflow from static DFT to an ML-driven grand canonical search ma
 
 Here is your implementation plan to independently reproduce the MLIP-GCGO methodology described by your collaborators.
 
+> **Translation table (this repo ≠ the manuscript).** This document is
+> the reference manuscript's walkthrough. Where it says **GOCIA**, this
+> repository uses **ase-ga** instead (the maintained spin-out of
+> `ase.ga` by the DTU/CAMD core ASE team —
+> [dtu-energy/ase-ga](https://github.com/dtu-energy/ase-ga)). The
+> methodology — box-sampling, grand-canonical genetic search at fixed
+> μ_O with rattle / insert / delete mutations and a Gaussian-biased
+> pass — is preserved. See [ground_truths.md](ground_truths.md)
+> 2026-05-19 entry and [ml-gcgo-pivot.md](ml-gcgo-pivot.md) §3, §5.
+> Box-sampling itself is a pure-ASE implementation in
+> [`ml/box_sampling.py`](../src/copper_oxide_dft/ml/box_sampling.py),
+> with no GA-backend dependency at all.
+
 ### Phase 1: Environment and Orchestration Setup
 
 The new approach completely replaces the manual slab-building in Phase 3 of your original guide. You will need to deploy two major computational frameworks on your DGX:
@@ -299,6 +312,6 @@ Once the training completes, `mace_run_train` will output validation metrics. Yo
 
 
 
-If your metrics land in this range, your fine-tuned MLIP is successfully localized to your PBE calculations and is ready to be plugged back into GOCIA for the massive Grand Canonical Genetic Algorithm (GCGA) minima searches.
+If your metrics land in this range, your fine-tuned MLIP is successfully localized to your PBE calculations and is ready to be plugged into the ase-ga–driven GCGA in [`ml/gcga.py`](../src/copper_oxide_dft/ml/gcga.py) for the massive Grand Canonical Genetic Algorithm minima searches.
 
 Let me know when you've got the model trained, and we can map out the GCGA configuration parameters to handle the biased/unbiased chemical potential sweeps.

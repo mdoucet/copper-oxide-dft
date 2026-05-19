@@ -49,7 +49,7 @@ The MLIP-GCGO pipeline (in development under `src/copper_oxide_dft/ml/`):
 from copper_oxide_dft.config import load_config
 from copper_oxide_dft.ml import box_sampling, qe_driver, curate, gcga, ensemble, fcp_rerank
 
-# 1. Seed structures perturbed via GOCIA box-sampling
+# 1. Seed structures perturbed via the box-sampling pipeline
 cfg = load_config("configs/converged.json")
 seeds = box_sampling.generate(seed_compositions=["Cu", "Cu8O", "Cu2O", "Cu4O3", "CuO"],
                               n_per_seed=500, rattle_ang=0.2, lattice_scale=0.05)
@@ -87,7 +87,7 @@ copper-oxide-dft make-slurm runs/fcp_rerank_minus0p8V --account <project>
 - **Core**: `ase`, `pymatgen`, `numpy`, `matplotlib`
 - **CLI**: `click`
 - **Testing**: `pytest`, `pytest-cov`
-- **MLIP-GCGO pipeline (new)**: `gocia` (structural search + GCGA driver), `mace-torch` (foundation-model fine-tuning), `dscribe` (SOAP descriptors), `scikit-learn` (Incremental PCA), `umap-learn` (2-D projection), `h5py` (ensemble store).
+- **MLIP-GCGO pipeline (new)**: `ase-ga` (GA backend — successor to `ase.ga`, maintained by DTU/CAMD), `mace-torch` (foundation-model fine-tuning), `dscribe` (SOAP descriptors), `scikit-learn` (Incremental PCA), `umap-learn` (2-D projection), `h5py` (ensemble store).
 - **External (not pip)**: Quantum ESPRESSO with CUDA build (`pw.x`, `hp.x`, optional Environ patch, optional ESM‑RISM); PseudoDojo PBE PAW pseudopotential library; SLURM on ORNL Frontier.
 
 ## Technical Notes
