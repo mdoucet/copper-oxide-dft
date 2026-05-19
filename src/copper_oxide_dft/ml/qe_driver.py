@@ -174,9 +174,7 @@ def write_dataset_inputs(
         sample_dir = out_root / sample_id
         sample_dir.mkdir(parents=True, exist_ok=True)
 
-        extra_input_data, additional_cards = _build_qe_input_pieces(
-            atoms, hubbard_u_ev
-        )
+        extra_input_data, additional_cards = _build_qe_input_pieces(atoms, hubbard_u_ev)
 
         write_pw_input(
             atoms,
@@ -269,7 +267,7 @@ def read_dataset_outputs(
 
         forces = atoms.get_forces() if atoms.calc is not None else None
         max_force = (
-            float((forces ** 2).sum(axis=1).max() ** 0.5)
+            float((forces**2).sum(axis=1).max() ** 0.5)
             if forces is not None and len(forces) > 0
             else None
         )
@@ -360,14 +358,14 @@ def _write_runner_script(script_path: Path, entries: list[DatasetEntry]) -> None
         "# Runs qe-run sequentially across each sample. Resume-safe: samples",
         "# that already have a pw.out with JOB DONE are skipped.",
         "set -euo pipefail",
-        "here=\"$(cd \"$(dirname \"$0\")\" && pwd)\"",
+        'here="$(cd "$(dirname "$0")" && pwd)"',
         "",
     ]
     for entry in entries:
         # Use bash-conditional skip so partial restart is cheap.
         lines.append(
             f"if ! grep -q 'JOB DONE' \"$here/{entry.relative_path}/pw.out\" 2>/dev/null; then\n"
-            f"    qe-run \"$here/{entry.relative_path}\"\n"
+            f'    qe-run "$here/{entry.relative_path}"\n'
             "fi"
         )
     lines.append("")

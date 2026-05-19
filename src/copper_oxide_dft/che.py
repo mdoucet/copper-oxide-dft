@@ -304,9 +304,7 @@ def adsorbate_state_relative_free_energy_ev(
         (absolute, not per-area; convert if comparing across cells).
     """
     # μ(O) and μ(OH) as functions of (U, pH).
-    mu_o = oxygen_chemical_potential_ev(
-        water_reference, u_she_v, ph, temperature_k
-    )
+    mu_o = oxygen_chemical_potential_ev(water_reference, u_she_v, ph, temperature_k)
     # μ(OH) = μ(H2O) - μ(H+ + e-), i.e. removing one proton-electron pair
     # from a water molecule.
     mu_h_pair = proton_electron_chemical_potential_ev(
@@ -315,7 +313,8 @@ def adsorbate_state_relative_free_energy_ev(
     mu_oh = water_reference.mu_h2o_ev - mu_h_pair
 
     delta_g = (
-        state.free_energy_ev - clean_slab.free_energy_ev
+        state.free_energy_ev
+        - clean_slab.free_energy_ev
         - state.n_adsorbed_o * mu_o
         - state.n_adsorbed_oh * mu_oh
     )
@@ -370,9 +369,7 @@ def phase_free_energy_per_cu_ev(
             f"n_cu={cu_metal_reference.n_cu}, n_o={cu_metal_reference.n_o}."
         )
 
-    mu_o = oxygen_chemical_potential_ev(
-        water_reference, u_she_v, ph, temperature_k
-    )
+    mu_o = oxygen_chemical_potential_ev(water_reference, u_she_v, ph, temperature_k)
     g_oxide_per_cu = (phase.free_energy_ev - phase.n_o * mu_o) / phase.n_cu
     g_cu_per_cu = cu_metal_reference.free_energy_ev / cu_metal_reference.n_cu
     return g_oxide_per_cu - g_cu_per_cu

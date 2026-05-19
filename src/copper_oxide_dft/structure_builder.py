@@ -260,7 +260,9 @@ def build_cu111_slab(
             f"Cannot fix {fix_bottom_layers} layers in a {layers}-layer slab."
         )
 
-    slab = fcc111("Cu", size=(supercell[0], supercell[1], layers), a=a, vacuum=vacuum_ang)
+    slab = fcc111(
+        "Cu", size=(supercell[0], supercell[1], layers), a=a, vacuum=vacuum_ang
+    )
     if fix_bottom_layers > 0:
         slab.set_constraint(_fix_bottom_layers(slab, fix_bottom_layers))
     return slab
@@ -315,9 +317,7 @@ def add_oxygen_adsorbates(
         1
     """
     if not 0.0 < coverage_ml <= 1.0:
-        raise ValueError(
-            f"coverage_ml must be in (0, 1]; got {coverage_ml}."
-        )
+        raise ValueError(f"coverage_ml must be in (0, 1]; got {coverage_ml}.")
     if site not in {"top", "bridge", "fcc", "hcp"}:
         raise ValueError(
             f"Unknown site {site!r}; expected one of top, bridge, fcc, hcp."
@@ -378,7 +378,9 @@ def _site_offset(slab: Atoms, surface_idx: int, site: str) -> tuple[float, float
     ``hcp``: as fcc but mirror-reflected; differs in which sublayer atom
         sits underneath.
     """
-    a_nn = float(np.linalg.norm(slab.cell[0]) / max(1, _supercell_repeats_along_x(slab)))
+    a_nn = float(
+        np.linalg.norm(slab.cell[0]) / max(1, _supercell_repeats_along_x(slab))
+    )
     x, y = float(slab[surface_idx].x), float(slab[surface_idx].y)
     if site == "top":
         return (x, y)
@@ -503,7 +505,11 @@ def add_explicit_water_layer(
             frac_y = (iy + 0.5) / n_y
             origin = frac_x * a_vec + frac_y * b_vec
             # Spread waters across the layer thickness uniformly in z.
-            z_offset = layer_thickness_ang * placed / max(1, n_waters - 1) if n_waters > 1 else 0.0
+            z_offset = (
+                layer_thickness_ang * placed / max(1, n_waters - 1)
+                if n_waters > 1
+                else 0.0
+            )
             o_pos = (origin[0], origin[1], z0 + z_offset)
             # Random rotation around z so adjacent waters don't all align.
             theta = float(rng.uniform(0, 2 * np.pi))

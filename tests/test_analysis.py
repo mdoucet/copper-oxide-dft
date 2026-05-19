@@ -41,9 +41,7 @@ def _make_sweep_dir(
         pseudo_dir=pseudo_dir,
     )
     (sub / "pw.out").write_text(
-        f"!    total energy = {energy_ry} Ry\n"
-        "the Fermi energy is 3.0 ev\n"
-        "JOB DONE.\n"
+        f"!    total energy = {energy_ry} Ry\nthe Fermi energy is 3.0 ev\nJOB DONE.\n"
     )
     return sub
 
@@ -90,8 +88,8 @@ def test_find_converged_value_low_asymptote_picks_largest_within_threshold() -> 
         _sp(0.01, -100.0000),  # asymptote (T→0)
         _sp(0.02, -100.0001),  # 0.1 meV — converged
         _sp(0.03, -100.0005),  # 0.5 meV — converged
-        _sp(0.04, -100.010),   # 10 meV — not converged
-        _sp(0.05, -100.020),   # 20 meV — way off
+        _sp(0.04, -100.010),  # 10 meV — not converged
+        _sp(0.05, -100.020),  # 20 meV — way off
     ]
     # Should pick 0.03 (largest value within 1 meV of 0.01).
     assert (

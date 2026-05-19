@@ -168,7 +168,7 @@ def _last_site_magnetizations(text: str) -> tuple[float, ...] | None:
     headers = list(_SITE_MAG_HEADER_RE.finditer(text))
     if not headers:
         return None
-    block = text[headers[-1].end():]
+    block = text[headers[-1].end() :]
     mags: list[float] = []
     for line in block.splitlines():
         match = _SITE_MAG_LINE_RE.match(line)
@@ -207,7 +207,9 @@ def parse_pw_output(path: str | os.PathLike[str]) -> PwResult:
         )
 
     homo_ev, lumo_ev = _last_homo_lumo(text)
-    band_gap_ev = (lumo_ev - homo_ev) if (homo_ev is not None and lumo_ev is not None) else None
+    band_gap_ev = (
+        (lumo_ev - homo_ev) if (homo_ev is not None and lumo_ev is not None) else None
+    )
 
     return PwResult(
         total_energy_ry=total_energy_ry,

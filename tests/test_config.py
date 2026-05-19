@@ -41,17 +41,13 @@ def test_system_config_preserves_unknown_extras() -> None:
 
 def test_system_config_rejects_short_kpts() -> None:
     with pytest.raises(ValueError, match="kpts must be 3"):
-        SystemConfig.from_dict(
-            {"ecutwfc_ry": 80.0, "kpts": [8, 8], "degauss_ry": 0.02}
-        )
+        SystemConfig.from_dict({"ecutwfc_ry": 80.0, "kpts": [8, 8], "degauss_ry": 0.02})
 
 
 def test_project_config_round_trip(tmp_path: Path) -> None:
     config = ProjectConfig(
         systems={
-            "bulk_cu": SystemConfig(
-                ecutwfc_ry=80.0, kpts=(8, 8, 8), degauss_ry=0.02
-            ),
+            "bulk_cu": SystemConfig(ecutwfc_ry=80.0, kpts=(8, 8, 8), degauss_ry=0.02),
             "bulk_cu2o": SystemConfig(
                 ecutwfc_ry=80.0,
                 kpts=(6, 6, 6),

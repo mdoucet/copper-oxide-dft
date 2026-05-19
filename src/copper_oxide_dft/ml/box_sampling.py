@@ -149,7 +149,9 @@ def perturb_structure(
     info["lattice_scale"] = scale
 
     if config.rattle_stdev_ang > 0:
-        atoms.rattle(stdev=config.rattle_stdev_ang, seed=int(rng.integers(0, 2**31 - 1)))
+        atoms.rattle(
+            stdev=config.rattle_stdev_ang, seed=int(rng.integers(0, 2**31 - 1))
+        )
     info["rattle_stdev_ang"] = config.rattle_stdev_ang
 
     n_delete = int(rng.integers(0, config.max_o_deletions + 1))
@@ -163,7 +165,9 @@ def perturb_structure(
     repair_steps = apply_hookean_repair(atoms, config)
     info["repair_steps"] = repair_steps
 
-    connectivity_ok = enforce_cu_o_connectivity(atoms, config.cu_o_connectivity_cutoff_ang)
+    connectivity_ok = enforce_cu_o_connectivity(
+        atoms, config.cu_o_connectivity_cutoff_ang
+    )
     info["cu_o_connectivity_ok"] = connectivity_ok
 
     if config.enforce_connectivity and not connectivity_ok:
@@ -264,7 +268,9 @@ def enforce_cu_o_connectivity(atoms: Atoms, cutoff_ang: float) -> bool:
         True trivially if there are no O atoms; False otherwise.
     """
     o_indices = [i for i, sym in enumerate(atoms.get_chemical_symbols()) if sym == "O"]
-    cu_indices = [i for i, sym in enumerate(atoms.get_chemical_symbols()) if sym == "Cu"]
+    cu_indices = [
+        i for i, sym in enumerate(atoms.get_chemical_symbols()) if sym == "Cu"
+    ]
     if not o_indices:
         return True
     if not cu_indices:
@@ -315,7 +321,10 @@ def _try_insert_one_oxygen(
     for _ in range(config.insert_attempts):
         frac = rng.uniform(0.0, 1.0, size=3)
         candidate_pos = frac @ cell
-        if _min_distance_to_existing(atoms, candidate_pos) >= config.insert_min_distance_ang:
+        if (
+            _min_distance_to_existing(atoms, candidate_pos)
+            >= config.insert_min_distance_ang
+        ):
             atoms.append(Atom("O", position=candidate_pos))
             return True
     return False
@@ -359,7 +368,9 @@ def _worst_pair_violation(
     return worst
 
 
-def _push_apart(atoms: Atoms, i: int, j: int, current_distance: float, target: float) -> None:
+def _push_apart(
+    atoms: Atoms, i: int, j: int, current_distance: float, target: float
+) -> None:
     """Displace atoms i and j along their bond axis to reach ``target`` separation.
 
     Uses the minimum-image vector so the repair respects periodic boundaries.

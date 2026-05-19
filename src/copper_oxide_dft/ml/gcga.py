@@ -176,9 +176,7 @@ def compute_x_o(atoms: Atoms) -> float:
     return float(n_o) / float(total)
 
 
-def grand_potential_ev(
-    energy_ev: float, atoms: Atoms, mu_o_ev: float
-) -> float:
+def grand_potential_ev(energy_ev: float, atoms: Atoms, mu_o_ev: float) -> float:
     """Ω_O = E - μ_O · N_O. Manuscript :doc:`/docs/machine-learned-dft.md` §4.
 
     Args:
@@ -225,7 +223,7 @@ def gaussian_bias_ev(
     if not centers:
         return 0.0
     x = float(x_o)
-    bumps = np.exp(-((x - np.asarray(centers, dtype=float)) ** 2) / (2.0 * sigma ** 2))
+    bumps = np.exp(-((x - np.asarray(centers, dtype=float)) ** 2) / (2.0 * sigma**2))
     return float(amplitude_ev * bumps.sum())
 
 
@@ -460,9 +458,7 @@ def insert_oxygen_offspring(
         z = rng.uniform(z_floor, z_ceiling)
         position = np.array([xy[0], xy[1], z])
 
-        if not _insert_passes_min_distance(
-            new, position, z_o, min_pair_distance_ang
-        ):
+        if not _insert_passes_min_distance(new, position, z_o, min_pair_distance_ang):
             continue
 
         new.append(Atom("O", position=position))
@@ -493,9 +489,7 @@ def _insert_passes_min_distance(
     new_sym = chemical_symbols[new_z]
     probe = atoms.copy()
     probe.append(Atom(new_sym, position=position))
-    distances = probe.get_distances(
-        len(probe) - 1, list(range(len(atoms))), mic=True
-    )
+    distances = probe.get_distances(len(probe) - 1, list(range(len(atoms))), mic=True)
     for i, d in enumerate(distances):
         pair = frozenset([new_sym, atoms[i].symbol])
         if pair not in min_pair_distance_ang:
@@ -514,9 +508,7 @@ def remove_oxygen_offspring(
     rng: np.random.Generator,
 ) -> Atoms | None:
     """Remove one random active O atom. Returns None if no active O exists."""
-    o_indices = [
-        i for i in range(n_slab, len(parent)) if parent[i].symbol == "O"
-    ]
+    o_indices = [i for i in range(n_slab, len(parent)) if parent[i].symbol == "O"]
     if not o_indices:
         return None
     idx = int(rng.choice(o_indices))
@@ -604,22 +596,20 @@ def run_gcga_sweep(
     except ImportError as exc:
         raise ImportError(
             "ase-ga is required to run the GCGA. Install with "
-            "`pip install ase-ga`, or via `pip install -e \".[ml]\"`."
+            '`pip install ase-ga`, or via `pip install -e ".[ml]"`.'
         ) from exc
     try:
         from mace.calculators import MACECalculator
     except ImportError as exc:
         raise ImportError(
             "mace-torch is required to evaluate the GCGA fitness. "
-            "Install via `pip install -e \".[ml]\"`."
+            'Install via `pip install -e ".[ml]"`.'
         ) from exc
 
     from copper_oxide_dft.ml.ensemble import phase_from_atoms, write_ensemble_extxyz
 
     if config.population_size < 1:
-        raise ValueError(
-            f"population_size must be >= 1; got {config.population_size}."
-        )
+        raise ValueError(f"population_size must be >= 1; got {config.population_size}.")
     if config.n_generations < 0:
         raise ValueError(
             f"n_generations must be non-negative; got {config.n_generations}."
@@ -669,9 +659,7 @@ def run_gcga_sweep(
             parent = population[parent_idx]
             op = op_names[int(rng.choice(len(op_names), p=op_weights))]
 
-            offspring = _apply_operator(
-                op, parent, n_slab, blmin_z, config, rng
-            )
+            offspring = _apply_operator(op, parent, n_slab, blmin_z, config, rng)
             if offspring is None:
                 continue
             if len(offspring) > config.max_atoms:
@@ -723,9 +711,7 @@ def _apply_operator(
 ) -> Atoms | None:
     """Dispatch one mutation operator. Returns the offspring or None."""
     if op == "rattle":
-        return rattle_offspring(
-            parent, n_slab, blmin_z, config.rattle_stdev_ang, rng
-        )
+        return rattle_offspring(parent, n_slab, blmin_z, config.rattle_stdev_ang, rng)
     if op == "insert":
         return insert_oxygen_offspring(
             parent,

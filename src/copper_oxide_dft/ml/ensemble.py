@@ -230,13 +230,15 @@ def write_ensemble_extxyz(
             energy=phase.energy_ev,
             forces=existing_forces,
         )
-        frame.info.update({
-            "mu_o_ev": phase.mu_o_ev,
-            "x_o": phase.x_o,
-            "omega_o_ev": phase.omega_o_ev,
-            "source": phase.source,
-            "index_in_source": phase.index_in_source,
-        })
+        frame.info.update(
+            {
+                "mu_o_ev": phase.mu_o_ev,
+                "x_o": phase.x_o,
+                "omega_o_ev": phase.omega_o_ev,
+                "source": phase.source,
+                "index_in_source": phase.index_in_source,
+            }
+        )
         frames.append(frame)
     ase_write(str(out_path), frames, format="extxyz")
     return out_path
@@ -271,8 +273,10 @@ def read_ensemble_extxyz(in_path: str | os.PathLike[str]) -> list[Phase]:
             raise ValueError(
                 f"Ensemble extxyz frame missing required keys in info: {info}"
             )
-        energy = float(frame.get_potential_energy()) if frame.calc is not None else float(
-            info.get("energy_ev", 0.0)
+        energy = (
+            float(frame.get_potential_energy())
+            if frame.calc is not None
+            else float(info.get("energy_ev", 0.0))
         )
         phases.append(
             Phase(
@@ -291,4 +295,5 @@ def read_ensemble_extxyz(in_path: str | os.PathLike[str]) -> list[Phase]:
 def _compute_x_o_local(atoms: Atoms) -> float:
     """Fallback used when an extxyz frame lacks an explicit x_o info key."""
     from copper_oxide_dft.ml.gcga import compute_x_o
+
     return compute_x_o(atoms)

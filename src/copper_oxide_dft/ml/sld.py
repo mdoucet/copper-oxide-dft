@@ -90,8 +90,10 @@ def compute_sld_summed_b_over_volume(
         ValueError: If ``z_range_ang`` is degenerate or no atoms fall
             within it, or a species lacks a scattering length.
     """
-    sl = dict(scattering_lengths_fm) if scattering_lengths_fm is not None else dict(
-        NEUTRON_SCATTERING_LENGTH_FM
+    sl = (
+        dict(scattering_lengths_fm)
+        if scattering_lengths_fm is not None
+        else dict(NEUTRON_SCATTERING_LENGTH_FM)
     )
 
     z = atoms.positions[:, 2]
@@ -127,7 +129,9 @@ def compute_sld_summed_b_over_volume(
     if lateral_area_ang2 is None:
         lateral_area_ang2 = _cell_lateral_area_ang2(atoms)
     if lateral_area_ang2 <= 0:
-        raise ValueError(f"lateral_area_ang2 must be positive; got {lateral_area_ang2}.")
+        raise ValueError(
+            f"lateral_area_ang2 must be positive; got {lateral_area_ang2}."
+        )
 
     depth_ang = z_max - z_min
     if depth_ang <= 0:
@@ -160,7 +164,7 @@ def compute_bulk_cu_sld_e6_per_a2(
     sl = scattering_lengths_fm or NEUTRON_SCATTERING_LENGTH_FM
     b_cu_ang = sl["Cu"] * FEMTOMETERS_TO_ANGSTROMS
     n_per_cell = 4  # conventional fcc cell
-    volume_ang3 = a_ang ** 3
+    volume_ang3 = a_ang**3
     return float(n_per_cell * b_cu_ang / volume_ang3 * SLD_UNIT_CONVERSION_TO_E6_PER_A2)
 
 
@@ -272,7 +276,9 @@ def compute_sld_profile(
 
     bin_volume_ang3 = lateral_area_ang2 * bin_width_ang
     sld = (
-        summed_b_fm * FEMTOMETERS_TO_ANGSTROMS / bin_volume_ang3
+        summed_b_fm
+        * FEMTOMETERS_TO_ANGSTROMS
+        / bin_volume_ang3
         * SLD_UNIT_CONVERSION_TO_E6_PER_A2
     )
     return SldProfile(

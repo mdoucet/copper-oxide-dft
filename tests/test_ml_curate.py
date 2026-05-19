@@ -68,8 +68,8 @@ def test_force_filter_drops_above_threshold() -> None:
 def test_force_filter_uses_attached_calc_if_metadata_missing() -> None:
     """If metadata.max_force is absent, fall back to the structure's calculator."""
     items = [
-        (_atoms_with_forces(1.0), {}),    # in-bound, no metadata
-        (_atoms_with_forces(20.0), {}),   # out-of-bound, no metadata
+        (_atoms_with_forces(1.0), {}),  # in-bound, no metadata
+        (_atoms_with_forces(20.0), {}),  # out-of-bound, no metadata
     ]
     kept = filter_by_max_force(items, max_force_ev_per_angstrom=10.0)
     assert len(kept) == 1
@@ -113,18 +113,25 @@ def test_grid_subsample_returns_empty_for_no_coords() -> None:
 def test_grid_subsample_one_point_per_cell() -> None:
     # 4 points each in its own well-separated quadrant: a 2×2 grid should
     # yield exactly 4 chosen indices.
-    coords = np.array([
-        [0.0, 0.0], [0.1, 0.1],
-        [10.0, 0.0], [10.1, 0.05],
-        [0.0, 10.0], [0.05, 10.05],
-        [10.0, 10.0], [10.05, 10.0],
-    ])
+    coords = np.array(
+        [
+            [0.0, 0.0],
+            [0.1, 0.1],
+            [10.0, 0.0],
+            [10.1, 0.05],
+            [0.0, 10.0],
+            [0.05, 10.05],
+            [10.0, 10.0],
+            [10.05, 10.0],
+        ]
+    )
     chosen = subsample_by_grid_2d(coords, grid_size=2, rng=np.random.default_rng(0))
     assert len(chosen) == 4
     # Every pair of chosen points should land in a different cell.
     chosen_coords = coords[chosen]
-    quadrant_ids = ((chosen_coords[:, 0] > 5).astype(int) * 2
-                    + (chosen_coords[:, 1] > 5).astype(int))
+    quadrant_ids = (chosen_coords[:, 0] > 5).astype(int) * 2 + (
+        chosen_coords[:, 1] > 5
+    ).astype(int)
     assert len(set(quadrant_ids.tolist())) == 4
 
 
@@ -167,9 +174,9 @@ def test_grid_subsample_indices_sorted_and_unique() -> None:
 
 def test_grid_subsample_rejects_bad_inputs() -> None:
     with pytest.raises(ValueError):
-        subsample_by_grid_2d(np.array([1, 2, 3]))         # 1-D
+        subsample_by_grid_2d(np.array([1, 2, 3]))  # 1-D
     with pytest.raises(ValueError):
-        subsample_by_grid_2d(np.zeros((5, 3)))            # 3-column
+        subsample_by_grid_2d(np.zeros((5, 3)))  # 3-column
     with pytest.raises(ValueError):
         subsample_by_grid_2d(np.zeros((5, 2)), grid_size=0)
 
@@ -183,16 +190,16 @@ def test_train_test_split_empty() -> None:
 
 def test_train_test_split_ten_to_one_ratio() -> None:
     items = list(range(11))
-    train, test = train_test_split(items, train_ratio=10.0 / 11.0,
-                                    rng=np.random.default_rng(0))
+    train, test = train_test_split(
+        items, train_ratio=10.0 / 11.0, rng=np.random.default_rng(0)
+    )
     assert len(train) == 10
     assert len(test) == 1
 
 
 def test_train_test_split_no_overlap_and_full_coverage() -> None:
     items = list(range(20))
-    train, test = train_test_split(items, train_ratio=0.7,
-                                    rng=np.random.default_rng(7))
+    train, test = train_test_split(items, train_ratio=0.7, rng=np.random.default_rng(7))
     assert set(train).isdisjoint(test)
     assert sorted(train + test) == items
 
@@ -214,8 +221,9 @@ def test_train_test_split_rejects_bad_ratio() -> None:
 
 def test_train_test_split_guarantees_at_least_one_train_item() -> None:
     """Even with a tiny ratio, at least one train item if any items at all."""
-    train, test = train_test_split([1, 2], train_ratio=0.01,
-                                    rng=np.random.default_rng(0))
+    train, test = train_test_split(
+        [1, 2], train_ratio=0.01, rng=np.random.default_rng(0)
+    )
     assert len(train) >= 1
 
 
@@ -327,12 +335,15 @@ def _has_ml_extras() -> bool:
         import dscribe  # noqa: F401
         import sklearn  # noqa: F401
         import umap  # noqa: F401
+
         return True
     except ImportError:
         return False
 
 
-@pytest.mark.skipif(not _has_ml_extras(), reason="ML extras (dscribe/sklearn/umap) not installed")
+@pytest.mark.skipif(
+    not _has_ml_extras(), reason="ML extras (dscribe/sklearn/umap) not installed"
+)
 def test_compute_soap_features_and_umap_round_trip() -> None:
     from copper_oxide_dft.ml.curate import compute_soap_features, project_to_umap_2d
     from copper_oxide_dft.structure_builder import (
@@ -349,7 +360,9 @@ def test_compute_soap_features_and_umap_round_trip() -> None:
     assert coords.shape == (3, 2)
 
 
-@pytest.mark.skipif(_has_ml_extras(), reason="Test the missing-deps contract only when deps absent")
+@pytest.mark.skipif(
+    _has_ml_extras(), reason="Test the missing-deps contract only when deps absent"
+)
 def test_compute_soap_features_raises_importerror_without_dscribe() -> None:
     """Contract: when dscribe isn't installed, the call must raise ImportError
     *at use time*, not at module import. Lets the surrounding pipeline stay
@@ -361,7 +374,9 @@ def test_compute_soap_features_raises_importerror_without_dscribe() -> None:
         compute_soap_features([build_bulk_cu()])
 
 
-@pytest.mark.skipif(_has_ml_extras(), reason="Test the missing-deps contract only when deps absent")
+@pytest.mark.skipif(
+    _has_ml_extras(), reason="Test the missing-deps contract only when deps absent"
+)
 def test_project_to_umap_2d_raises_importerror_without_sklearn_or_umap() -> None:
     """Same contract as above but for the sklearn + umap stage."""
     from copper_oxide_dft.ml.curate import project_to_umap_2d

@@ -79,8 +79,12 @@ def test_proton_electron_potential_decreases_with_ph_by_nernstian_slope() -> Non
 
 def test_oxygen_potential_at_she_and_ph0_equals_mu_h2o_minus_mu_h2() -> None:
     refs = ReferenceEnergetics(
-        e_h2_ev=-1.0, e_h2o_ev=-5.0, zpe_h2_ev=0.0, zpe_h2o_ev=0.0,
-        ts_h2_ev=0.0, ts_h2o_ev=0.0,
+        e_h2_ev=-1.0,
+        e_h2o_ev=-5.0,
+        zpe_h2_ev=0.0,
+        zpe_h2o_ev=0.0,
+        ts_h2_ev=0.0,
+        ts_h2o_ev=0.0,
     )
     mu_o = oxygen_chemical_potential_ev(refs, u_she_v=0.0, ph=0.0)
     # μ(O) = μ(H2O) - μ(H2) = (-5) - (-1) = -4
@@ -103,8 +107,12 @@ def _literature_inputs() -> tuple[
 ]:
     """Experimental ΔG_f at 298 K cast into PhaseEnergetics for sanity tests."""
     references = ReferenceEnergetics(
-        e_h2_ev=0.0, e_h2o_ev=-2.458,
-        zpe_h2_ev=0.0, zpe_h2o_ev=0.0, ts_h2_ev=0.0, ts_h2o_ev=0.0,
+        e_h2_ev=0.0,
+        e_h2o_ev=-2.458,
+        zpe_h2_ev=0.0,
+        zpe_h2o_ev=0.0,
+        ts_h2_ev=0.0,
+        ts_h2o_ev=0.0,
     )
     cu = PhaseEnergetics(name="Cu", n_cu=1, n_o=0, e_dft_ev=0.0)
     cu2o = PhaseEnergetics(name="Cu2O", n_cu=2, n_o=1, e_dft_ev=-1.534)
@@ -190,8 +198,12 @@ def test_phase_free_energy_per_cu_rejects_non_metal_reference() -> None:
 
 def _surface_inputs() -> tuple[AdsorbateState, ReferenceEnergetics]:
     refs = ReferenceEnergetics(
-        e_h2_ev=0.0, e_h2o_ev=-2.458,
-        zpe_h2_ev=0.0, zpe_h2o_ev=0.0, ts_h2_ev=0.0, ts_h2o_ev=0.0,
+        e_h2_ev=0.0,
+        e_h2o_ev=-2.458,
+        zpe_h2_ev=0.0,
+        zpe_h2o_ev=0.0,
+        ts_h2_ev=0.0,
+        ts_h2o_ev=0.0,
     )
     clean = AdsorbateState(
         name="Cu(111)", n_adsorbed_o=0, n_adsorbed_oh=0, e_dft_ev=-100.0
@@ -216,7 +228,9 @@ def test_adsorbate_state_o_coverage_slope_minus_2_eV_per_V() -> None:
     clean, refs = _surface_inputs()
     # One adsorbed O at some arbitrary slab energy. Slope per O is -2 eV/V.
     o_state = AdsorbateState(
-        name="O on Cu(111)", n_adsorbed_o=1, n_adsorbed_oh=0,
+        name="O on Cu(111)",
+        n_adsorbed_o=1,
+        n_adsorbed_oh=0,
         e_dft_ev=-103.0,
     )
     g0 = adsorbate_state_relative_free_energy_ev(
@@ -234,7 +248,9 @@ def test_adsorbate_state_oh_coverage_slope_minus_1_eV_per_V() -> None:
 
     clean, refs = _surface_inputs()
     oh_state = AdsorbateState(
-        name="OH on Cu(111)", n_adsorbed_o=0, n_adsorbed_oh=1,
+        name="OH on Cu(111)",
+        n_adsorbed_o=0,
+        n_adsorbed_oh=1,
         e_dft_ev=-102.5,
     )
     g0 = adsorbate_state_relative_free_energy_ev(
@@ -252,7 +268,9 @@ def test_adsorbate_state_oxidizing_potential_stabilizes_o_coverage() -> None:
 
     clean, refs = _surface_inputs()
     o_state = AdsorbateState(
-        name="O on Cu(111)", n_adsorbed_o=1, n_adsorbed_oh=0,
+        name="O on Cu(111)",
+        n_adsorbed_o=1,
+        n_adsorbed_oh=0,
         e_dft_ev=-103.0,
     )
     # Pick a U high enough that even a weakly bound O wins.
@@ -264,9 +282,7 @@ def test_adsorbate_state_oxidizing_potential_stabilizes_o_coverage() -> None:
 
 def test_adsorbate_state_n_proton_electron_pairs() -> None:
     """Each O carries 2 PCET; each OH carries 1."""
-    state = AdsorbateState(
-        name="mixed", n_adsorbed_o=2, n_adsorbed_oh=3, e_dft_ev=0.0
-    )
+    state = AdsorbateState(name="mixed", n_adsorbed_o=2, n_adsorbed_oh=3, e_dft_ev=0.0)
     assert state.n_proton_electron_pairs == 2 * 2 + 1 * 3
 
 

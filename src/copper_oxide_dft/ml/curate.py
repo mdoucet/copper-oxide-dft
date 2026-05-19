@@ -228,10 +228,12 @@ def subsample_by_grid_2d(
     x_range = max(x_max - x_min, 1e-12)
     y_range = max(y_max - y_min, 1e-12)
 
-    ix = np.clip(((coords_2d[:, 0] - x_min) / x_range * grid_size).astype(int),
-                  0, grid_size - 1)
-    iy = np.clip(((coords_2d[:, 1] - y_min) / y_range * grid_size).astype(int),
-                  0, grid_size - 1)
+    ix = np.clip(
+        ((coords_2d[:, 0] - x_min) / x_range * grid_size).astype(int), 0, grid_size - 1
+    )
+    iy = np.clip(
+        ((coords_2d[:, 1] - y_min) / y_range * grid_size).astype(int), 0, grid_size - 1
+    )
     cell_ids = ix * grid_size + iy
 
     chosen: list[int] = []
@@ -363,7 +365,9 @@ def prepare_dataset(
         umap_coords = project_to_umap_2d(
             soap_features, pca_components=pca_components, random_state=rng_seed
         )
-        selected_indices = subsample_by_grid_2d(umap_coords, grid_size=grid_size, rng=rng)
+        selected_indices = subsample_by_grid_2d(
+            umap_coords, grid_size=grid_size, rng=rng
+        )
         subsampled = [atoms_only[i] for i in selected_indices]
     else:
         # Below the SOAP/UMAP threshold (typically only happens in tiny

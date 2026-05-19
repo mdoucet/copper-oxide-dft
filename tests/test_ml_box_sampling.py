@@ -31,7 +31,10 @@ def test_connectivity_passes_when_no_oxygen() -> None:
 
 
 def test_connectivity_passes_for_intact_cu2o() -> None:
-    assert enforce_cu_o_connectivity(build_bulk_cu2o(), CU_O_CONNECTIVITY_CUTOFF_ANG) is True
+    assert (
+        enforce_cu_o_connectivity(build_bulk_cu2o(), CU_O_CONNECTIVITY_CUTOFF_ANG)
+        is True
+    )
 
 
 def test_connectivity_fails_when_oxygen_is_isolated() -> None:
@@ -142,15 +145,22 @@ def test_perturb_returns_fresh_atoms_when_accepted() -> None:
 def test_perturb_records_info_keys() -> None:
     rng = np.random.default_rng(0)
     result = perturb_structure(build_bulk_cu2o(), BoxSamplingConfig(), rng)
-    for key in ("lattice_scale", "rattle_stdev_ang", "o_deleted", "o_inserted",
-                "repair_steps", "cu_o_connectivity_ok"):
+    for key in (
+        "lattice_scale",
+        "rattle_stdev_ang",
+        "o_deleted",
+        "o_inserted",
+        "repair_steps",
+        "cu_o_connectivity_ok",
+    ):
         assert key in result.info, f"missing info key {key!r}"
 
 
 def test_perturb_applies_lattice_scale_within_bounds() -> None:
     rng = np.random.default_rng(123)
-    cfg = BoxSamplingConfig(lattice_scale=0.05, rattle_stdev_ang=0.0,
-                            max_o_insertions=0, max_o_deletions=0)
+    cfg = BoxSamplingConfig(
+        lattice_scale=0.05, rattle_stdev_ang=0.0, max_o_insertions=0, max_o_deletions=0
+    )
     seed = build_bulk_cu()
     seed_volume = seed.get_volume()
     for _ in range(20):
@@ -165,8 +175,7 @@ def test_perturb_applies_lattice_scale_within_bounds() -> None:
 
 def test_perturb_with_zero_rattle_and_no_inserts_only_rescales() -> None:
     rng = np.random.default_rng(0)
-    cfg = BoxSamplingConfig(rattle_stdev_ang=0.0, max_o_insertions=0,
-                            max_o_deletions=0)
+    cfg = BoxSamplingConfig(rattle_stdev_ang=0.0, max_o_insertions=0, max_o_deletions=0)
     seed = build_bulk_cu()
     result = perturb_structure(seed, cfg, rng)
     assert result.accepted
@@ -179,8 +188,9 @@ def test_perturb_with_zero_rattle_and_no_inserts_only_rescales() -> None:
 
 def test_perturb_can_insert_and_delete_oxygens() -> None:
     rng = np.random.default_rng(7)
-    cfg = BoxSamplingConfig(rattle_stdev_ang=0.0, lattice_scale=0.0,
-                            max_o_insertions=3, max_o_deletions=0)
+    cfg = BoxSamplingConfig(
+        rattle_stdev_ang=0.0, lattice_scale=0.0, max_o_insertions=3, max_o_deletions=0
+    )
     # Larger seed so insertions have room.
     seed = build_bulk_cu2o() * (2, 2, 2)
     result = perturb_structure(seed, cfg, rng)
@@ -233,12 +243,14 @@ def test_perturbed_structure_has_no_atoms_below_minimum_distance() -> None:
         symbols = result.atoms.get_chemical_symbols()
         for i in range(len(result.atoms)):
             for j in range(i + 1, len(result.atoms)):
-                r_min = cfg.min_pair_distance_ang.get(frozenset([symbols[i], symbols[j]]))
+                r_min = cfg.min_pair_distance_ang.get(
+                    frozenset([symbols[i], symbols[j]])
+                )
                 if r_min is None:
                     continue
                 # Allow a tiny floating-point tolerance below r_min.
                 assert distances[i, j] >= r_min - 1e-6, (
-                    f"pair ({i},{j}) below minimum: {distances[i,j]:.3f} < {r_min}"
+                    f"pair ({i},{j}) below minimum: {distances[i, j]:.3f} < {r_min}"
                 )
 
 
@@ -276,8 +288,9 @@ def test_sample_batch_rejects_invalid_arguments() -> None:
     with pytest.raises(ValueError):
         sample_batch(build_bulk_cu(), -1, BoxSamplingConfig(), rng)
     with pytest.raises(ValueError):
-        sample_batch(build_bulk_cu(), 1, BoxSamplingConfig(), rng,
-                     max_attempts_per_sample=0)
+        sample_batch(
+            build_bulk_cu(), 1, BoxSamplingConfig(), rng, max_attempts_per_sample=0
+        )
 
 
 # ---------- defaults ----------------------------------------------------------
@@ -296,4 +309,7 @@ def test_default_insert_min_distance_above_cu_o_minimum() -> None:
     # Insertion is more conservative than the Hookean cutoff — we want new
     # atoms to land somewhere DFT can actually handle, not on the boundary.
     cfg = BoxSamplingConfig()
-    assert cfg.min_pair_distance_ang[frozenset(["Cu", "O"])] <= DEFAULT_INSERT_MIN_DISTANCE_ANG
+    assert (
+        cfg.min_pair_distance_ang[frozenset(["Cu", "O"])]
+        <= DEFAULT_INSERT_MIN_DISTANCE_ANG
+    )

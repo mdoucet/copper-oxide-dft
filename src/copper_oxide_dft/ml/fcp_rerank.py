@@ -127,9 +127,7 @@ def prepare_fcp_inputs(
     out_root = Path(out_root)
     out_root.mkdir(parents=True, exist_ok=True)
 
-    fcp = fcp_overrides_for_potential(
-        u_target_v, she_absolute_v=reference_absolute_v
-    )
+    fcp = fcp_overrides_for_potential(u_target_v, she_absolute_v=reference_absolute_v)
 
     written: list[Path] = []
     for idx, candidate in enumerate(candidates):
@@ -182,7 +180,9 @@ def write_frontier_submit_scripts(
     Returns:
         Paths to the written ``submit.sh`` files.
     """
-    cfg = SlurmConfig.for_frontier(account=account, walltime=walltime, qe_module=qe_module)
+    cfg = SlurmConfig.for_frontier(
+        account=account, walltime=walltime, qe_module=qe_module
+    )
     return write_slurm_scripts_for_tree(Path(out_root), cfg)
 
 

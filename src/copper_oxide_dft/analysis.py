@@ -291,7 +291,9 @@ def plot_convergence(
     asymptote = ys[0] if result.low_value_is_asymptote else ys[-1]
     threshold_ev = result.threshold_mev_per_atom * 1.0e-3
     ax.axhline(asymptote, color="gray", linestyle="--", linewidth=0.8)
-    ax.axhspan(asymptote - threshold_ev, asymptote + threshold_ev, color="gray", alpha=0.15)
+    ax.axhspan(
+        asymptote - threshold_ev, asymptote + threshold_ev, color="gray", alpha=0.15
+    )
 
     if result.converged_value is not None:
         ax.axvline(

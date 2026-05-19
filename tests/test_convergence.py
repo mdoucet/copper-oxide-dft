@@ -129,9 +129,10 @@ def test_sweep_rejects_param_in_base_kwargs(tmp_path: Path, pseudo_dir: Path) ->
 
 
 def test_supported_sweep_parameters_set() -> None:
-    assert frozenset(
-        {"ecutwfc", "kpts", "degauss", "hubbard_u"}
-    ) == SUPPORTED_SWEEP_PARAMETERS
+    assert (
+        frozenset({"ecutwfc", "kpts", "degauss", "hubbard_u"})
+        == SUPPORTED_SWEEP_PARAMETERS
+    )
 
 
 def test_sweep_hubbard_u_writes_one_input_per_value(

@@ -186,7 +186,9 @@ def adsorbate_phase_diagram(
         ValueError: If ``states`` is empty or a grid size is < 2.
     """
     if not states:
-        raise ValueError("Pass at least one adsorbate state to adsorbate_phase_diagram().")
+        raise ValueError(
+            "Pass at least one adsorbate state to adsorbate_phase_diagram()."
+        )
     if u_steps < 2 or ph_steps < 2:
         raise ValueError("u_steps and ph_steps must each be >= 2.")
 
