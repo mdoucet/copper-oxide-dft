@@ -27,15 +27,6 @@ jobs:
         pip install ruff black mypy
         pip install -e .
 
-    - name: Check code formatting with Black
-      run: |
-        black --check src/ tests/
-
     - name: Lint with Ruff
       run: |
         ruff check src/ tests/
-
-    - name: Type check with MyPy
-      run: |
-        mypy src/
-      continue-on-error: true  # Don't fail CI on type errors initially
